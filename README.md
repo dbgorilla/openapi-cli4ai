@@ -13,19 +13,24 @@ Let your AI coding agent (Claude Code, Cursor, Codex, Copilot) talk to any REST 
 
 ## Install
 
-```bash
-# Requires uv (https://docs.astral.sh/uv/)
-uv pip install openapi-cli4ai
+**Requires:** [uv](https://docs.astral.sh/uv/getting-started/installation/)
 
-# Or run directly without installing
+```bash
+# Recommended — run directly, no install needed
 uvx openapi-cli4ai --help
+
+# Or install globally
+uv tool install openapi-cli4ai
+
+# Or install into a virtual environment
+uv pip install openapi-cli4ai
 ```
 
 ## Quick Start
 
 ```bash
-# Point it at any API with an OpenAPI spec
-openapi-cli4ai init petstore --url https://petstore3.swagger.io/api/v3
+# Point it at any API with an OpenAPI spec (prefix with uvx if not installed)
+uvx openapi-cli4ai init petstore --url https://petstore3.swagger.io/api/v3
 
 # Discover endpoints
 openapi-cli4ai endpoints
