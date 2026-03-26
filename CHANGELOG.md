@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.0] - 2026-03-26
+
+### Added
+
+- `run` command — call API operations by name with auto-routed inputs
+- Case-insensitive operationId matching
+- Fuzzy suggestions when an operationId isn't found
+- Auto-generated release notes via `.github/release.yml`
+
+### Fixed
+
+- `typer>=0.12` crashed with click 8.2+ — bumped to `>=0.24` (#3)
+- `--format json` appended non-JSON summary line breaking machine parsing
+- `init` auto-detect ignored `--insecure` flag
+
 ## [0.1.0] - 2026-03-25
 
 ### Added

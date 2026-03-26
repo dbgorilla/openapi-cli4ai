@@ -47,7 +47,7 @@ from rich.panel import Panel  # noqa: E402
 from rich.table import Table  # noqa: E402
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 APP_NAME = "openapi-cli4ai"
 CONFIG_FILE = Path.home() / ".openapi-cli4ai.toml"
 CACHE_DIR = Path.home() / ".cache" / APP_NAME

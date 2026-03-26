@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openapi-cli4ai"
-version = "0.1.1"
+version = "0.2.0"
 description = "Turn any REST API with an OpenAPI spec into an AI-ready CLI"
 readme = "README.md"
 license = "MIT"

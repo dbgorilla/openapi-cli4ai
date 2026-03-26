@@ -33,7 +33,10 @@ openapi-cli4ai endpoints
 # Search endpoints
 openapi-cli4ai endpoints -s pet
 
-# Call an endpoint
+# Run an operation by name (inputs auto-routed from the spec)
+openapi-cli4ai run findPetsByStatus --input '{"status": "available"}'
+
+# Or call an endpoint directly
 openapi-cli4ai call GET /pet/findByStatus --query status=available
 ```
 
@@ -89,6 +92,27 @@ openapi-cli4ai init myapi --url https://api.example.com --spec-url https://examp
 # Skip SSL verification (internal/staging APIs)
 openapi-cli4ai -k init myapi --url https://staging.internal.example.com
 ```
+
+### `run` — Run an operation by name
+
+```bash
+# Query parameter — auto-routed from the spec
+openapi-cli4ai run findPetsByStatus --input '{"status": "available"}'
+
+# Path parameter — substituted into the URL
+openapi-cli4ai run getPetById --input '{"petId": 123}'
+
+# Request body — keys not matching a parameter go to the body
+openapi-cli4ai run addPet --input '{"name": "Rex", "status": "available"}'
+
+# Load input from a file
+openapi-cli4ai run addPet --input-file pet.json
+
+# Raw JSON output
+openapi-cli4ai run getInventory --json
+```
+
+The spec tells the tool where each parameter goes (path, query, header, body). You just pass a flat JSON object.
 
 ### `endpoints` — Discover API endpoints
 
