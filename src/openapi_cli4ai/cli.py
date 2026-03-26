@@ -878,6 +878,181 @@ def cmd_call(
             console.print(f"[dim]{elapsed:.2f}s[/dim]")
 
 
+# ── Commands: run ──────────────────────────────────────────────────────────────
+def _route_inputs(input_data: dict, parameters: list, has_request_body: bool) -> tuple[dict, dict, dict, dict | None]:
+    """Route flat input keys to path params, query params, headers, and body.
+
+    Returns (path_params, query_params, header_params, body).
+    """
+    path_params = {}
+    query_params = {}
+    header_params = {}
+    body_keys = {}
+
+    # Build a lookup of parameter names to their location
+    param_map: dict[str, str] = {}
+    for p in parameters:
+        if isinstance(p, dict) and "name" in p:
+            param_map[p["name"]] = p.get("in", "query")
+
+    for key, value in input_data.items():
+        location = param_map.get(key)
+        if location == "path":
+            path_params[key] = value
+        elif location == "query":
+            query_params[key] = value
+        elif location == "header":
+            header_params[key] = value
+        elif location:
+            # cookie or other — treat as query
+            query_params[key] = value
+        else:
+            # Not a declared parameter — goes into request body
+            body_keys[key] = value
+
+    body = body_keys if body_keys else None
+    # If there's a requestBody defined but no body keys collected,
+    # and the entire input looks like it could be the body, send it all
+    if has_request_body and not body and not param_map:
+        body = input_data
+
+    return path_params, query_params, header_params, body
+
+
+@app.command("run")
+def cmd_run(
+    operation: Annotated[
+        str, typer.Argument(help="Operation ID from the OpenAPI spec (e.g., findPetsByStatus, addPet)")
+    ],
+    input_data: Annotated[
+        Optional[str], typer.Option("--input", "-i", help="Input as JSON (keys auto-routed to path/query/body)")
+    ] = None,
+    input_file: Annotated[Optional[str], typer.Option("--input-file", "-f", help="Read input from a JSON file")] = None,
+    stream: Annotated[bool, typer.Option("--stream", help="Stream SSE response")] = False,
+    raw: Annotated[bool, typer.Option("--raw", help="Print raw response without formatting")] = False,
+    output_json_flag: Annotated[bool, typer.Option("--json", help="Output raw JSON")] = False,
+) -> None:
+    """Run an API operation by name. Inputs are auto-routed to the right place.
+
+    The spec defines where each parameter goes (path, query, header, body).
+    You just pass a flat JSON object and the tool figures it out.
+
+    Examples:
+        openapi-cli4ai run findPetsByStatus --input '{"status": "available"}'
+        openapi-cli4ai run getPetById --input '{"petId": 123}'
+        openapi-cli4ai run addPet --input '{"name": "Rex", "status": "available"}'
+        openapi-cli4ai run addPet --input-file pet.json
+    """
+    profile_name, profile = get_active_profile()
+    spec = fetch_spec(profile)
+
+    # Look up the operation in the spec
+    endpoint = extract_full_endpoint_schema(spec, operation)
+    if not endpoint:
+        # Try case-insensitive fuzzy match
+        all_eps = extract_endpoint_summaries(spec)
+        matches = [e for e in all_eps if e["operationId"].lower() == operation.lower()]
+        if matches:
+            endpoint = extract_full_endpoint_schema(spec, matches[0]["operationId"])
+
+    if not endpoint:
+        console.print(f"[red]Operation '{operation}' not found in spec.[/red]")
+        # Suggest similar operations
+        all_eps = extract_endpoint_summaries(spec)
+        op_lower = operation.lower()
+        suggestions = [e["operationId"] for e in all_eps if op_lower in e["operationId"].lower()][:5]
+        if suggestions:
+            console.print("[dim]Did you mean:[/dim]")
+            for s in suggestions:
+                console.print(f"  [cyan]{s}[/cyan]")
+        raise typer.Exit(1)
+
+    # Parse input
+    parsed_input = {}
+    if input_file:
+        fp = Path(input_file)
+        if not fp.exists():
+            console.print(f"[red]Input file not found: {input_file}[/red]")
+            raise typer.Exit(1)
+        try:
+            parsed_input = json.loads(fp.read_text())
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Invalid JSON in {input_file}: {e}[/red]")
+            raise typer.Exit(1)
+    elif input_data:
+        try:
+            parsed_input = json.loads(input_data)
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Invalid JSON input: {e}[/red]")
+            raise typer.Exit(1)
+
+    # Route inputs to the right places
+    method = endpoint["method"]
+    path_template = endpoint["path"]
+    parameters = endpoint.get("parameters", [])
+    has_request_body = endpoint.get("requestBody") is not None
+
+    path_params, query_params, header_params, json_body = _route_inputs(parsed_input, parameters, has_request_body)
+
+    # Substitute path parameters
+    full_path = path_template
+    for key, value in path_params.items():
+        full_path = full_path.replace(f"{{{key}}}", str(value))
+
+    # Check for unresolved path params
+    if "{" in full_path:
+        import re as _re
+
+        missing = _re.findall(r"\{(\w+)\}", full_path)
+        console.print(f"[red]Missing required path parameter(s): {', '.join(missing)}[/red]")
+        console.print(f'[dim]Provide them in --input, e.g. --input \'{{"{missing[0]}": "value"}}\'[/dim]')
+        raise typer.Exit(1)
+
+    # Build URL and make request
+    base_url = profile["base_url"].rstrip("/")
+    url = f"{base_url}{full_path}"
+
+    verify = profile.get("verify_ssl", True) and get_verify_ssl()
+    headers = dict(profile.get("headers", {}))
+    headers.update(get_auth_headers(profile))
+    headers.update(header_params)
+
+    start_time = time.perf_counter()
+    console.print(f"[dim]{method} {full_path}...[/dim]")
+
+    with httpx.Client(verify=verify, timeout=60.0, follow_redirects=True) as client:
+        if stream:
+            headers["Accept"] = "text/event-stream"
+            with client.stream(
+                method,
+                url,
+                json=json_body,
+                params=query_params or None,
+                headers=headers,
+            ) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    _display_error(
+                        response.json() if "json" in response.headers.get("content-type", "") else response.text,
+                        response.status_code,
+                    )
+                    raise typer.Exit(1)
+                stream_sse(response)
+            elapsed = time.perf_counter() - start_time
+            console.print(f"[dim]Completed in {elapsed:.2f}s[/dim]")
+        else:
+            response = client.request(
+                method,
+                url,
+                json=json_body,
+                params=query_params or None,
+                headers=headers,
+            )
+            elapsed = time.perf_counter() - start_time
+            handle_response(response, raw=raw, json_output=output_json_flag)
+            console.print(f"[dim]{elapsed:.2f}s[/dim]")
+
+
 # ── Commands: init ─────────────────────────────────────────────────────────────
 @app.command("init")
 def cmd_init(
