@@ -7,7 +7,7 @@
        |_|                    |_|
 ```
 
-Turn any REST API with an OpenAPI spec into an AI-ready CLI. No MCP server. No custom integration. Just point it at a URL.
+Let your AI coding agent (Claude Code, Cursor, Codex, Copilot) talk to any REST API. No MCP servers. No schemas in the prompt. Just point it at a URL and let it fly.
 
 ![openapi-cli4ai quickstart demo](demo.gif)
 
