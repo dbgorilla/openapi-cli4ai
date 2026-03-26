@@ -1,0 +1,94 @@
+# Example profiles for openapi-cli4ai
+#
+# Copy this to ~/.openapi-cli4ai.toml and customize.
+# Or just use `openapi-cli4ai init <name> --url <url>` to create profiles automatically.
+#
+# IMPORTANT: Never put actual secrets in this file. Use environment variables
+# (token_env_var, env_var, etc.) and set the real values in your environment.
+
+active_profile = "petstore"
+
+# ── Public APIs (no auth) ────────────────────────────────────────
+
+[profiles.petstore]
+base_url = "https://petstore3.swagger.io/api/v3"
+openapi_path = "/openapi.json"
+
+[profiles.petstore.auth]
+type = "none"
+
+[profiles.nws]
+base_url = "https://api.weather.gov"
+openapi_path = "/openapi.json"
+
+[profiles.nws.auth]
+type = "none"
+
+[profiles.holidays]
+base_url = "https://date.nager.at"
+openapi_path = "/openapi/v3.json"
+
+[profiles.holidays.auth]
+type = "none"
+
+# PokéAPI — 97 endpoints
+[profiles.pokeapi]
+base_url = "https://pokeapi.co"
+openapi_url = "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/openapi.yml"
+
+[profiles.pokeapi.auth]
+type = "none"
+
+# ── Bearer token from env var ────────────────────────────────────
+
+[profiles.github]
+base_url = "https://api.github.com"
+openapi_url = "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json"
+
+[profiles.github.auth]
+type = "bearer"
+token_env_var = "GITHUB_TOKEN"
+
+[profiles.github.headers]
+Accept = "application/vnd.github+json"
+"X-GitHub-Api-Version" = "2022-11-28"
+
+# ── API key auth ─────────────────────────────────────────────────
+
+[profiles.stripe]
+base_url = "https://api.stripe.com"
+
+[profiles.stripe.auth]
+type = "api-key"
+env_var = "STRIPE_SECRET_KEY"
+header = "Authorization"
+prefix = "Bearer "
+
+# ── Basic auth ───────────────────────────────────────────────────
+
+[profiles.jira]
+base_url = "https://yourcompany.atlassian.net"
+openapi_url = "https://developer.atlassian.com/cloud/jira/platform/swagger-v3.v3.json"
+
+[profiles.jira.auth]
+type = "basic"
+username_env_var = "ATLASSIAN_EMAIL"
+password_env_var = "ATLASSIAN_API_KEY"
+
+# ── Token endpoint (username/password login) ─────────────────────
+
+[profiles.dbgorilla]
+base_url = "{env:DBGORILLA_URL}"
+openapi_path = "/openapi.json"
+verify_ssl = false
+
+[profiles.dbgorilla.auth]
+type = "bearer"
+token_endpoint = "/api/v0_1/auth/token"
+refresh_endpoint = "/api/v0_1/auth/token/refresh"
+
+[profiles.dbgorilla.auth.payload]
+account = "{env:DBGORILLA_USER}"
+password = "{env:DBGORILLA_PASS}"
+tenant = "{env:DBGORILLA_TENANT}"
+account_type = "USERNAME"

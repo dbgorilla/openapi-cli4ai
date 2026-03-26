@@ -1,0 +1,9 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["openapi-cli4ai"]
+# ///
+"""Standalone shim — installs openapi-cli4ai from PyPI and runs it."""
+from openapi_cli4ai.cli import app
+
+app()
