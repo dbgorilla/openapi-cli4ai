@@ -194,6 +194,12 @@ openapi-cli4ai login --username admin --password-file /path/to/secret
 # Login with password from stdin
 echo "my-password" | openapi-cli4ai login --username admin --password-stdin
 
+# OIDC login (opens browser for Auth0, Keycloak, etc.)
+openapi-cli4ai login
+
+# OIDC login without browser (headless/SSH — prints URL, you paste redirect back)
+openapi-cli4ai login --no-browser
+
 # Logout (clear cached tokens)
 openapi-cli4ai logout
 ```
@@ -241,6 +247,22 @@ account_type = "USERNAME"
 
 Payload placeholders: `{username}` and `{password}` come from the login prompt. `{env:VAR_NAME}` pulls from environment variables or a `.env` file (loaded automatically).
 
+OIDC example (Auth0, Keycloak, or any OIDC provider):
+
+```toml
+[profiles.my-oidc-app]
+base_url = "https://api.example.com"
+openapi_path = "/openapi.json"
+
+[profiles.my-oidc-app.auth]
+type = "oidc"
+authorize_url = "https://your-idp.com/authorize"
+token_url = "https://your-idp.com/oauth/token"
+client_id = "your-client-id"
+scopes = "openid profile email"
+callback_port = 9876
+```
+
 ### Auth Types
 
 | Type | Use Case | Config Fields |
@@ -248,6 +270,7 @@ Payload placeholders: `{username}` and `{password}` come from the login prompt. 
 | `none` | Public APIs | — |
 | `bearer` | Token from env var | `token_env_var` |
 | `bearer` | OAuth token endpoint | `token_endpoint`, `refresh_endpoint`, `payload` |
+| `oidc` | OIDC Authorization Code + PKCE | `authorize_url`, `token_url`, `client_id`, `scopes` |
 | `api-key` | API key in header | `env_var`, `header`, `prefix` |
 | `basic` | HTTP Basic auth | `username_env_var`, `password_env_var` |
 
@@ -264,6 +287,8 @@ Payload placeholders: `{username}` and `{password}` come from the login prompt. 
 | [Jira Cloud](https://developer.atlassian.com/cloud/jira/platform/rest/v3/) | 581 | Basic | `init jira --url https://your-domain.atlassian.net --spec-url ... --auth basic` |
 | [OpenRouter](https://openrouter.ai) | 36 | Bearer | `init openrouter --url https://openrouter.ai/api/v1 --spec-url ... --auth bearer` |
 | [DBGorilla](https://dbgorilla.com) | 500+ | Token endpoint | See `examples/profiles.toml.example` |
+| [Auth0](https://auth0.com) | — | OIDC + PKCE | `init myapp --url https://api.example.com --auth oidc` |
+| [Keycloak](https://www.keycloak.org) | — | OIDC + PKCE | `init myapp --url https://api.example.com --auth oidc` |
 
 Works with any AI agent that has shell access — Claude Code, Cursor, GitHub Copilot, or anything that can run `endpoints` and `call`.
 

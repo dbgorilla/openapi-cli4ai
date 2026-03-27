@@ -27,9 +27,13 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import time
 import tomllib
+import urllib.parse
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -376,6 +380,8 @@ def get_auth_headers(profile: dict, quiet: bool = False) -> dict:
         return {}
     elif auth_type == "bearer":
         return _bearer_auth(profile, auth_config, quiet)
+    elif auth_type == "oidc":
+        return _oidc_auth(profile, auth_config, quiet)
     elif auth_type == "api-key":
         return _api_key_auth(auth_config, quiet)
     elif auth_type == "basic":
@@ -467,6 +473,262 @@ def _try_refresh_token(profile: dict, auth_config: dict, cached: dict) -> dict |
     except Exception:
         pass
     return None
+
+
+# ── OIDC (Authorization Code + PKCE) ─────────────────────────────────────────
+
+
+def _oidc_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
+    """Handle OIDC auth -- cached token with form-encoded refresh."""
+    profile_name = profile.get("_name", "default")
+    token_cache = CACHE_DIR / f"{profile_name}_token.json"
+
+    if token_cache.exists():
+        try:
+            cached = json.loads(token_cache.read_text())
+            expires_at = cached.get("expires_at", 0)
+
+            # Valid token -- use it
+            if time.time() < (expires_at - 300):
+                return {"Authorization": f"Bearer {cached['access_token']}"}
+
+            # Try refresh (form-encoded, standard OIDC)
+            if "refresh_token" in cached:
+                verify = profile.get("verify_ssl", True) and get_verify_ssl()
+                refreshed = _oidc_refresh(auth_config, cached, verify=verify)
+                if refreshed:
+                    refreshed["expires_at"] = time.time() + refreshed.get("expires_in", 300)
+                    ensure_dirs()
+                    token_cache.write_text(json.dumps(refreshed))
+                    token_cache.chmod(0o600)
+                    return {"Authorization": f"Bearer {refreshed['access_token']}"}
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass
+
+    if not quiet:
+        console.print("[yellow]Token expired or missing. Run 'openapi-cli4ai login' to authenticate.[/yellow]")
+    raise typer.Exit(1)
+
+
+def _oidc_refresh(auth_config: dict, cached: dict, verify: bool = True) -> dict | None:
+    """Refresh an OIDC token using form-encoded POST (standard OIDC spec)."""
+    token_url = auth_config.get("token_url", "")
+    client_id = auth_config.get("client_id", "")
+    if not token_url or not client_id:
+        return None
+    try:
+        with httpx.Client(verify=verify, timeout=30.0) as client:
+            resp = client.post(
+                token_url,
+                data={
+                    "grant_type": "refresh_token",
+                    "client_id": client_id,
+                    "refresh_token": cached["refresh_token"],
+                },
+            )
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+    return None
+
+
+class _OIDCCallbackHandler(BaseHTTPRequestHandler):
+    """HTTP handler that captures the OIDC authorization code callback."""
+
+    auth_code: str | None = None
+    error: str | None = None
+    expected_state: str | None = None
+
+    def do_GET(self) -> None:
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+
+        # Validate state to prevent CSRF
+        received_state = params.get("state", [None])[0]
+        if _OIDCCallbackHandler.expected_state and received_state != _OIDCCallbackHandler.expected_state:
+            _OIDCCallbackHandler.error = "state_mismatch"
+            self.send_response(400)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                b"<html><body><h2>Login failed</h2><p>State mismatch - possible CSRF attack.</p></body></html>"
+            )
+            return
+
+        if "code" in params:
+            _OIDCCallbackHandler.auth_code = params["code"][0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                b"<html><body><h2>Login successful</h2>"
+                b"<p>You can close this tab and return to the terminal.</p>"
+                b"</body></html>"
+            )
+        else:
+            _OIDCCallbackHandler.error = params.get("error", ["unknown"])[0]
+            self.send_response(400)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(
+                f"<html><body><h2>Login failed</h2><p>{_OIDCCallbackHandler.error}</p></body></html>".encode()
+            )
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass  # Suppress HTTP server logging
+
+
+def _oidc_login(auth_config: dict, profile_name: str, no_browser: bool = False, verify: bool = True) -> None:
+    """Run OIDC Authorization Code + PKCE flow.
+
+    With browser (default): opens browser, listens on localhost for callback.
+    Without browser (--no-browser): prints URL, user pastes redirect URL back.
+    """
+    authorize_url = auth_config.get("authorize_url", "")
+    token_url = auth_config.get("token_url", "")
+    client_id = auth_config.get("client_id", "")
+    scopes = auth_config.get("scopes", "openid")
+    callback_port = auth_config.get("callback_port", 8484)
+    redirect_uri = auth_config.get("redirect_uri", f"http://localhost:{callback_port}/callback")
+
+    if not authorize_url or not token_url or not client_id:
+        console.print("[red]OIDC auth requires authorize_url, token_url, and client_id.[/red]")
+        raise typer.Exit(1)
+
+    # PKCE: generate code verifier + challenge
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(32)
+
+    # Build authorization URL
+    auth_params = urllib.parse.urlencode(
+        {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scopes,
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
+    )
+    full_auth_url = f"{authorize_url}?{auth_params}"
+
+    if no_browser:
+        auth_code = _oidc_login_no_browser(full_auth_url)
+    else:
+        auth_code = _oidc_login_browser(full_auth_url, callback_port, state)
+
+    # Exchange code for tokens
+    _oidc_exchange_code(
+        token_url=token_url,
+        client_id=client_id,
+        auth_code=auth_code,
+        redirect_uri=redirect_uri,
+        code_verifier=code_verifier,
+        profile_name=profile_name,
+        verify=verify,
+    )
+
+
+def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str) -> str:
+    """Open browser and listen for the OIDC callback on localhost."""
+    _OIDCCallbackHandler.auth_code = None
+    _OIDCCallbackHandler.error = None
+    _OIDCCallbackHandler.expected_state = state
+    server = HTTPServer(("127.0.0.1", callback_port), _OIDCCallbackHandler)
+    server.timeout = 120
+
+    console.print(f"[dim]Listening on http://localhost:{callback_port}/callback[/dim]")
+    console.print("[bold]Opening browser for login...[/bold]")
+    webbrowser.open(full_auth_url)
+    console.print("[dim]Waiting for callback (120s timeout)...[/dim]")
+
+    server.handle_request()
+    server.server_close()
+
+    if _OIDCCallbackHandler.error:
+        console.print(f"[red]OIDC error: {_OIDCCallbackHandler.error}[/red]")
+        raise typer.Exit(1)
+    if not _OIDCCallbackHandler.auth_code:
+        console.print("[red]No authorization code received.[/red]")
+        raise typer.Exit(1)
+
+    return _OIDCCallbackHandler.auth_code
+
+
+def _oidc_login_no_browser(full_auth_url: str) -> str:
+    """Print the auth URL, user pastes back the redirect URL containing the code."""
+    console.print("\n[bold]Open this URL in any browser to log in:[/bold]\n")
+    console.print(f"  {full_auth_url}\n")
+    console.print(
+        "[dim]After login, your browser will redirect to a localhost URL.\n"
+        "Copy the full URL from your browser's address bar and paste it below.[/dim]\n"
+    )
+    redirect_input = typer.prompt("Paste the redirect URL")
+
+    # Extract the authorization code from the pasted URL
+    parsed = urllib.parse.urlparse(redirect_input.strip())
+    params = urllib.parse.parse_qs(parsed.query)
+
+    if "error" in params:
+        console.print(f"[red]OIDC error: {params['error'][0]}[/red]")
+        raise typer.Exit(1)
+
+    if "code" not in params:
+        console.print("[red]No authorization code found in the URL.[/red]")
+        console.print("[dim]Expected a URL like: http://localhost:.../callback?code=...&state=...[/dim]")
+        raise typer.Exit(1)
+
+    return params["code"][0]
+
+
+def _oidc_exchange_code(
+    *,
+    token_url: str,
+    client_id: str,
+    auth_code: str,
+    redirect_uri: str,
+    code_verifier: str,
+    profile_name: str,
+    verify: bool = True,
+) -> None:
+    """Exchange an authorization code for tokens and cache them."""
+    try:
+        with httpx.Client(verify=verify, timeout=30.0) as client:
+            resp = client.post(
+                token_url,
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": client_id,
+                    "code": auth_code,
+                    "redirect_uri": redirect_uri,
+                    "code_verifier": code_verifier,
+                },
+            )
+
+        if resp.status_code != 200:
+            console.print(f"[red]Token exchange failed ({resp.status_code}):[/red]")
+            console.print(resp.text)
+            raise typer.Exit(1)
+
+        token_data = resp.json()
+        if "expires_in" in token_data:
+            token_data["expires_at"] = time.time() + token_data["expires_in"]
+        elif "expires_at" not in token_data:
+            token_data["expires_at"] = time.time() + 86400
+
+        token_cache = CACHE_DIR / f"{profile_name}_token.json"
+        ensure_dirs()
+        token_cache.write_text(json.dumps(token_data))
+        token_cache.chmod(0o600)
+
+        console.print("[green]Logged in successfully![/green]")
+        console.print(f"[dim]Token cached at {token_cache}[/dim]")
+
+    except httpx.ConnectError:
+        console.print(f"[red]Cannot connect to {token_url}[/red]")
+        raise typer.Exit(1)
 
 
 def _api_key_auth(auth_config: dict, quiet: bool = False) -> dict:
@@ -1062,7 +1324,7 @@ def cmd_init(
         Optional[str], typer.Option("--spec", "-s", help="Path to OpenAPI spec (auto-detected if omitted)")
     ] = None,
     spec_url: Annotated[Optional[str], typer.Option("--spec-url", help="Full URL to OpenAPI spec file")] = None,
-    auth_type: Annotated[str, typer.Option("--auth", help="Auth type: bearer, api-key, basic, none")] = "none",
+    auth_type: Annotated[str, typer.Option("--auth", help="Auth type: bearer, oidc, api-key, basic, none")] = "none",
 ) -> None:
     """Initialize a new API profile with guided setup.
 
@@ -1147,6 +1409,22 @@ def cmd_init(
                 "password": "{password}",
             }
             console.print("[dim]Run 'openapi-cli4ai login --username <user>' to authenticate.[/dim]")
+    elif auth_type == "oidc":
+        authorize_url = typer.prompt("Authorization URL (full URL)")
+        token_url = typer.prompt("Token URL (full URL)")
+        client_id_val = typer.prompt("Client ID")
+        scopes = typer.prompt("Scopes", default="openid")
+        redirect_uri_val = typer.prompt("Redirect URI (or leave blank for localhost callback)", default="")
+        if redirect_uri_val:
+            profile["auth"]["redirect_uri"] = redirect_uri_val
+        else:
+            cb_port = typer.prompt("Local callback port", default="8484")
+            profile["auth"]["callback_port"] = int(cb_port)
+        profile["auth"]["authorize_url"] = authorize_url
+        profile["auth"]["token_url"] = token_url
+        profile["auth"]["client_id"] = client_id_val
+        profile["auth"]["scopes"] = scopes
+        console.print("[dim]Run 'openapi-cli4ai login' to authenticate via browser.[/dim]")
     elif auth_type == "api-key":
         env_var = typer.prompt("Environment variable for API key", default=f"{name.upper()}_API_KEY")
         header_name = typer.prompt("Header name", default="Authorization")
@@ -1206,13 +1484,21 @@ def cmd_login(
     ] = "",
     password_file: Annotated[Optional[str], typer.Option("--password-file", help="Read password from file")] = None,
     password_stdin: Annotated[bool, typer.Option("--password-stdin", help="Read password from stdin")] = False,
+    no_browser: Annotated[
+        bool,
+        typer.Option("--no-browser", help="OIDC: print login URL instead of opening browser (for headless/SSH)"),
+    ] = False,
 ) -> None:
     """Login to an API that uses OAuth/token-endpoint authentication.
 
-    This is for APIs with auth.type=bearer and a token_endpoint configured.
-    For APIs using static tokens or API keys, just set the environment variable.
+    Supports two auth modes:
+        - auth.type=bearer with token_endpoint: username/password grant
+        - auth.type=oidc: Authorization Code + PKCE flow (browser or --no-browser)
 
-    Password input methods (in priority order):
+    For OIDC, use --no-browser on headless machines: prints the login URL,
+    then prompts you to paste back the redirect URL after authenticating.
+
+    Password input methods (bearer mode, in priority order):
         1. --password-file /path/to/file
         2. --password-stdin (piped input)
         3. --password flag (avoid for special characters)
@@ -1221,8 +1507,22 @@ def cmd_login(
     profile_name, profile = get_active_profile()
     auth_config = profile.get("auth", {})
 
+    # OIDC flow
+    if auth_config.get("type") == "oidc":
+        verify = profile.get("verify_ssl", True) and get_verify_ssl()
+        _oidc_login(auth_config, profile_name, no_browser=no_browser, verify=verify)
+        # Try fetching the spec now that we're authenticated
+        try:
+            spec = fetch_spec(profile, refresh=True)
+            endpoints = extract_endpoint_summaries(spec)
+            spec_title = spec.get("info", {}).get("title", "Unknown")
+            console.print(f"[green]Fetched spec: {spec_title} ({len(endpoints)} endpoints)[/green]")
+        except (typer.Exit, Exception):
+            pass
+        return
+
     if auth_config.get("type") != "bearer" or not auth_config.get("token_endpoint"):
-        console.print("[yellow]Login is for profiles with bearer auth + token_endpoint.[/yellow]")
+        console.print("[yellow]Login is for profiles with bearer auth + token_endpoint, or oidc.[/yellow]")
         console.print("[dim]If your API uses a static token or API key, set the environment variable instead.[/dim]")
         raise typer.Exit(1)
 
@@ -1329,7 +1629,7 @@ def cmd_profile_add(
     name: Annotated[str, typer.Argument(help="Profile name")],
     url: Annotated[str, typer.Option("--url", "-u", help="Base URL of the API")] = "",
     spec_path: Annotated[str, typer.Option("--spec", "-s", help="Path to OpenAPI spec")] = "/openapi.json",
-    auth_type: Annotated[str, typer.Option("--auth", help="Auth type: bearer, api-key, basic, none")] = "none",
+    auth_type: Annotated[str, typer.Option("--auth", help="Auth type: bearer, oidc, api-key, basic, none")] = "none",
 ) -> None:
     """Add a new API profile."""
     if not url:
