@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] - 2026-03-28
+
+### Added
+
+- OIDC Authorization Code + PKCE auth type (`auth.type = "oidc"`)
+- Browser-based login with localhost callback
+- `--no-browser` flag for headless/SSH environments
+- CSRF protection via state parameter validation
+- Tested with Auth0 and Keycloak
+
 ## [0.2.0] - 2026-03-26
 
 ### Added
