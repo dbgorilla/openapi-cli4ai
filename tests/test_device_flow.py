@@ -8,7 +8,6 @@ import json
 import time
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 from click.exceptions import Exit as ClickExit
 
@@ -351,7 +350,7 @@ def test_token_exchange_default_body(cli_module):
         MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
         MockClient.return_value.__exit__ = MagicMock(return_value=False)
 
-        result = cli_module._token_exchange(token_data, auth_config, "https://api.example.com")
+        cli_module._token_exchange(token_data, auth_config, "https://api.example.com")
 
     body = mock_client.post.call_args[1]["content"]
     parsed = json.loads(body)

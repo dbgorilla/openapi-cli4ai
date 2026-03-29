@@ -7,16 +7,13 @@ cmd_init, profile subcommands, and the main callback.
 from __future__ import annotations
 
 import json
-import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 import tomli_w
 from typer.testing import CliRunner
 
-from openapi_cli4ai import cli as cli_mod
 from openapi_cli4ai.cli import app
 
 runner = CliRunner()

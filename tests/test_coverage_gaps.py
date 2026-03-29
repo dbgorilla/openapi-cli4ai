@@ -13,7 +13,6 @@ import tomli_w
 from click.exceptions import Exit as ClickExit
 from typer.testing import CliRunner
 
-from openapi_cli4ai import cli as cli_mod
 from openapi_cli4ai.cli import app
 
 runner = CliRunner()
@@ -436,7 +435,7 @@ class TestCmdLoginFlows:
             mock_client.post.return_value = mock_resp
             MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
-            result = runner.invoke(app, ["login", "-u", "user", "--password-stdin"])
+            runner.invoke(app, ["login", "-u", "user", "--password-stdin"])
 
         # May exit due to stdin detection in runner, that's OK
         # The important thing is the code path was exercised
