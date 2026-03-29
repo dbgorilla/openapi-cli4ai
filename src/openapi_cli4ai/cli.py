@@ -23,6 +23,7 @@ Environment variables:
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import os
@@ -380,7 +381,7 @@ def get_auth_headers(profile: dict, quiet: bool = False) -> dict:
         return {}
     elif auth_type == "bearer":
         return _bearer_auth(profile, auth_config, quiet)
-    elif auth_type == "oidc":
+    elif auth_type in ("oidc", "device", "auto"):
         return _oidc_auth(profile, auth_config, quiet)
     elif auth_type == "api-key":
         return _api_key_auth(auth_config, quiet)
@@ -578,7 +579,13 @@ class _OIDCCallbackHandler(BaseHTTPRequestHandler):
         pass  # Suppress HTTP server logging
 
 
-def _oidc_login(auth_config: dict, profile_name: str, no_browser: bool = False, verify: bool = True) -> None:
+def _oidc_login(
+    auth_config: dict,
+    profile_name: str,
+    no_browser: bool = False,
+    verify: bool = True,
+    base_url: str = "",
+) -> None:
     """Run OIDC Authorization Code + PKCE flow.
 
     With browser (default): opens browser, listens on localhost for callback.
@@ -628,6 +635,8 @@ def _oidc_login(auth_config: dict, profile_name: str, no_browser: bool = False, 
         code_verifier=code_verifier,
         profile_name=profile_name,
         verify=verify,
+        auth_config=auth_config,
+        base_url=base_url,
     )
 
 
@@ -692,6 +701,8 @@ def _oidc_exchange_code(
     code_verifier: str,
     profile_name: str,
     verify: bool = True,
+    auth_config: dict | None = None,
+    base_url: str = "",
 ) -> None:
     """Exchange an authorization code for tokens and cache them."""
     try:
@@ -713,6 +724,11 @@ def _oidc_exchange_code(
             raise typer.Exit(1)
 
         token_data = resp.json()
+
+        # Two-phase auth: exchange IdP tokens for local API tokens
+        if auth_config and auth_config.get("token_exchange_endpoint") and base_url:
+            token_data = _token_exchange(token_data, auth_config, base_url, verify=verify)
+
         if "expires_in" in token_data:
             token_data["expires_at"] = time.time() + token_data["expires_in"]
         elif "expires_at" not in token_data:
@@ -729,6 +745,230 @@ def _oidc_exchange_code(
     except httpx.ConnectError:
         console.print(f"[red]Cannot connect to {token_url}[/red]")
         raise typer.Exit(1)
+
+
+# ── Token Exchange (two-phase auth) ───────────────────────────────────────────
+
+
+def _token_exchange(
+    token_data: dict,
+    auth_config: dict,
+    base_url: str,
+    verify: bool = True,
+) -> dict:
+    """Exchange IdP tokens for local API tokens via a token exchange endpoint.
+
+    If token_exchange_endpoint is configured, POST the IdP tokens to it and
+    return the exchange response. Otherwise, return the original token_data.
+    """
+    exchange_endpoint = auth_config.get("token_exchange_endpoint")
+    if not exchange_endpoint:
+        return token_data
+
+    body_template = auth_config.get(
+        "token_exchange_body",
+        '{"access_token": "{access_token}"}',
+    )
+    body_str = body_template.replace(
+        "{access_token}", token_data.get("access_token", "")
+    ).replace("{refresh_token}", token_data.get("refresh_token", ""))
+
+    exchange_url = f"{base_url.rstrip('/')}{exchange_endpoint}"
+    try:
+        with httpx.Client(verify=verify, timeout=30.0) as client:
+            resp = client.post(
+                exchange_url,
+                content=body_str,
+                headers={"Content-Type": "application/json"},
+            )
+        if resp.status_code != 200:
+            console.print(f"[red]Token exchange failed ({resp.status_code}):[/red]")
+            console.print(resp.text)
+            raise typer.Exit(1)
+        return resp.json()
+    except httpx.ConnectError:
+        console.print(f"[red]Cannot connect to {exchange_url}[/red]")
+        raise typer.Exit(1)
+
+
+# ── OAuth 2.0 Device Authorization Flow (RFC 8628) ───────────────────────────
+
+
+def _device_discover_endpoints(auth_config: dict, verify: bool = True) -> dict:
+    """Discover device authorization and token endpoints.
+
+    Priority: device_config_url > issuer_url (well-known) > explicit endpoints.
+    Returns dict with device_authorization_endpoint, token_endpoint, client_id.
+    """
+    device_config_url = auth_config.get("device_config_url")
+    issuer_url = auth_config.get("issuer_url")
+
+    if device_config_url:
+        try:
+            with httpx.Client(verify=verify, timeout=15.0) as client:
+                resp = client.get(device_config_url)
+            if resp.status_code == 200:
+                config = resp.json()
+                return {
+                    "device_authorization_endpoint": config["device_authorization_endpoint"],
+                    "token_endpoint": config["token_endpoint"],
+                    "client_id": config.get("client_id", auth_config.get("client_id", "")),
+                }
+        except (httpx.HTTPError, KeyError, json.JSONDecodeError) as e:
+            console.print(f"[red]Failed to fetch device config from {device_config_url}: {e}[/red]")
+            raise typer.Exit(1)
+
+    if issuer_url:
+        well_known_url = f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
+        try:
+            with httpx.Client(verify=verify, timeout=15.0) as client:
+                resp = client.get(well_known_url)
+            if resp.status_code == 200:
+                oidc_config = resp.json()
+                device_ep = oidc_config.get("device_authorization_endpoint")
+                token_ep = oidc_config.get("token_endpoint")
+                if not device_ep:
+                    console.print(
+                        f"[red]Issuer {issuer_url} does not advertise device_authorization_endpoint.[/red]"
+                    )
+                    raise typer.Exit(1)
+                return {
+                    "device_authorization_endpoint": device_ep,
+                    "token_endpoint": token_ep,
+                    "client_id": auth_config.get("client_id", ""),
+                }
+        except (httpx.HTTPError, json.JSONDecodeError) as e:
+            console.print(f"[red]Failed to fetch OIDC discovery from {well_known_url}: {e}[/red]")
+            raise typer.Exit(1)
+
+    # Explicit endpoints
+    device_ep = auth_config.get("device_authorization_endpoint")
+    token_ep = auth_config.get("token_endpoint")
+    client_id = auth_config.get("client_id", "")
+    if not device_ep or not token_ep:
+        console.print(
+            "[red]Device auth requires device_config_url, issuer_url, or explicit "
+            "device_authorization_endpoint + token_endpoint.[/red]"
+        )
+        raise typer.Exit(1)
+    return {
+        "device_authorization_endpoint": device_ep,
+        "token_endpoint": token_ep,
+        "client_id": client_id,
+    }
+
+
+def _device_login(
+    auth_config: dict, profile_name: str, profile: dict, no_browser: bool = False, verify: bool = True
+) -> None:
+    """Run OAuth 2.0 Device Authorization Grant (RFC 8628) flow."""
+    endpoints = _device_discover_endpoints(auth_config, verify=verify)
+    device_ep = endpoints["device_authorization_endpoint"]
+    token_ep = endpoints["token_endpoint"]
+    client_id = endpoints.get("client_id") or auth_config.get("client_id", "")
+    scopes = auth_config.get("scopes", "openid")
+
+    if not client_id:
+        console.print("[red]Device auth requires client_id.[/red]")
+        raise typer.Exit(1)
+
+    # Step 1: Request device code
+    try:
+        with httpx.Client(verify=verify, timeout=30.0) as client:
+            resp = client.post(
+                device_ep,
+                data={"client_id": client_id, "scope": scopes},
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        if resp.status_code != 200:
+            console.print(f"[red]Device authorization request failed ({resp.status_code}):[/red]")
+            console.print(resp.text)
+            raise typer.Exit(1)
+    except httpx.ConnectError:
+        console.print(f"[red]Cannot connect to {device_ep}[/red]")
+        raise typer.Exit(1)
+
+    device_data = resp.json()
+    device_code = device_data["device_code"]
+    user_code = device_data["user_code"]
+    verification_uri = device_data["verification_uri"]
+    verification_uri_complete = device_data.get("verification_uri_complete")
+    expires_in = device_data.get("expires_in", 600)
+    interval = device_data.get("interval", 5)
+
+    # Step 2: Display instructions
+    display_uri = verification_uri_complete or verification_uri
+    console.print(f"\n[bold]Open this URL in your browser:[/bold]\n  {display_uri}\n")
+    console.print(f"[bold]Code:[/bold] {user_code}")
+    console.print("[dim]Waiting for authorization...[/dim]\n")
+
+    if not no_browser:
+        webbrowser.open(display_uri)
+
+    # Step 3: Poll for token
+    deadline = time.time() + expires_in
+    with httpx.Client(verify=verify, timeout=30.0) as client:
+        while time.time() < deadline:
+            time.sleep(interval)
+            try:
+                poll_resp = client.post(
+                    token_ep,
+                    data={
+                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                        "client_id": client_id,
+                        "device_code": device_code,
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+            except httpx.HTTPError:
+                continue
+
+            if poll_resp.status_code == 200:
+                token_data = poll_resp.json()
+                break
+            else:
+                try:
+                    error_data = poll_resp.json()
+                    error_code = error_data.get("error", "")
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                if error_code == "authorization_pending":
+                    continue
+                elif error_code == "slow_down":
+                    interval += 5
+                    continue
+                elif error_code == "expired_token":
+                    console.print("[red]Device code expired. Please try again.[/red]")
+                    raise typer.Exit(1)
+                elif error_code == "access_denied":
+                    console.print("[red]Authorization was denied.[/red]")
+                    raise typer.Exit(1)
+                else:
+                    console.print(f"[red]Device flow error: {error_code}[/red]")
+                    raise typer.Exit(1)
+        else:
+            console.print("[red]Device code expired (timeout). Please try again.[/red]")
+            raise typer.Exit(1)
+
+    # Step 4: Token exchange (two-phase auth) if configured
+    base_url = profile.get("base_url", "")
+    if auth_config.get("token_exchange_endpoint") and base_url:
+        token_data = _token_exchange(token_data, auth_config, base_url, verify=verify)
+
+    # Step 5: Cache token
+    if "expires_in" in token_data:
+        token_data["expires_at"] = time.time() + token_data["expires_in"]
+    elif "expires_at" not in token_data:
+        token_data["expires_at"] = time.time() + 86400
+
+    token_cache = CACHE_DIR / f"{profile_name}_token.json"
+    ensure_dirs()
+    token_cache.write_text(json.dumps(token_data))
+    token_cache.chmod(0o600)
+
+    console.print("[green]Logged in successfully![/green]")
+    console.print(f"[dim]Token cached at {token_cache}[/dim]")
 
 
 def _api_key_auth(auth_config: dict, quiet: bool = False) -> dict:
@@ -1324,7 +1564,23 @@ def cmd_init(
         Optional[str], typer.Option("--spec", "-s", help="Path to OpenAPI spec (auto-detected if omitted)")
     ] = None,
     spec_url: Annotated[Optional[str], typer.Option("--spec-url", help="Full URL to OpenAPI spec file")] = None,
-    auth_type: Annotated[str, typer.Option("--auth", help="Auth type: bearer, oidc, api-key, basic, none")] = "none",
+    auth_type: Annotated[
+        str, typer.Option("--auth", help="Auth type: bearer, oidc, device, auto, api-key, basic, none")
+    ] = "none",
+    # Non-interactive auth flags
+    issuer_url: Annotated[Optional[str], typer.Option("--issuer-url", help="OIDC issuer URL for discovery")] = None,
+    client_id: Annotated[Optional[str], typer.Option("--client-id", help="OAuth client ID")] = None,
+    scopes: Annotated[Optional[str], typer.Option("--scopes", help="OAuth scopes")] = None,
+    device_config_url: Annotated[
+        Optional[str], typer.Option("--device-config-url", help="Device flow config discovery URL")
+    ] = None,
+    authorize_url: Annotated[
+        Optional[str], typer.Option("--authorize-url", help="OIDC authorization endpoint URL")
+    ] = None,
+    token_url: Annotated[Optional[str], typer.Option("--token-url", help="OIDC token endpoint URL")] = None,
+    token_exchange_endpoint: Annotated[
+        Optional[str], typer.Option("--token-exchange-endpoint", help="Token exchange endpoint path for two-phase auth")
+    ] = None,
 ) -> None:
     """Initialize a new API profile with guided setup.
 
@@ -1333,7 +1589,8 @@ def cmd_init(
     Examples:
         openapi-cli4ai init petstore --url https://petstore3.swagger.io/api/v3
         openapi-cli4ai init myapp --url http://localhost:8000 --auth bearer
-        openapi-cli4ai init github --url https://api.github.com --spec-url https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json --auth bearer
+        openapi-cli4ai init myapp --url http://localhost:8000 --auth device --issuer-url https://auth.example.com/realms/myrealm --client-id my-cli
+        openapi-cli4ai init myapp --url http://localhost:8000 --auth oidc --authorize-url https://auth.example.com/authorize --token-url https://auth.example.com/token --client-id my-client
     """
     if not url:
         url = typer.prompt("Base URL of the API")
@@ -1410,21 +1667,14 @@ def cmd_init(
             }
             console.print("[dim]Run 'openapi-cli4ai login --username <user>' to authenticate.[/dim]")
     elif auth_type == "oidc":
-        authorize_url = typer.prompt("Authorization URL (full URL)")
-        token_url = typer.prompt("Token URL (full URL)")
-        client_id_val = typer.prompt("Client ID")
-        scopes = typer.prompt("Scopes", default="openid")
-        redirect_uri_val = typer.prompt("Redirect URI (or leave blank for localhost callback)", default="")
-        if redirect_uri_val:
-            profile["auth"]["redirect_uri"] = redirect_uri_val
-        else:
-            cb_port = typer.prompt("Local callback port", default="8484")
-            profile["auth"]["callback_port"] = int(cb_port)
-        profile["auth"]["authorize_url"] = authorize_url
-        profile["auth"]["token_url"] = token_url
-        profile["auth"]["client_id"] = client_id_val
-        profile["auth"]["scopes"] = scopes
+        _init_oidc_auth(profile, authorize_url, token_url, client_id, scopes, issuer_url, token_exchange_endpoint)
         console.print("[dim]Run 'openapi-cli4ai login' to authenticate via browser.[/dim]")
+    elif auth_type == "device":
+        _init_device_auth(profile, device_config_url, issuer_url, client_id, scopes, token_exchange_endpoint)
+        console.print("[dim]Run 'openapi-cli4ai login' to authenticate.[/dim]")
+    elif auth_type == "auto":
+        _init_auto_auth(profile, issuer_url, client_id, scopes, token_exchange_endpoint)
+        console.print("[dim]Run 'openapi-cli4ai login' to authenticate (flow auto-detected).[/dim]")
     elif auth_type == "api-key":
         env_var = typer.prompt("Environment variable for API key", default=f"{name.upper()}_API_KEY")
         header_name = typer.prompt("Header name", default="Authorization")
@@ -1475,6 +1725,101 @@ def cmd_init(
     console.print("  openapi-cli4ai call GET /path       [dim]# Call an endpoint[/dim]")
 
 
+def _init_oidc_auth(
+    profile: dict,
+    authorize_url: str | None,
+    token_url: str | None,
+    client_id: str | None,
+    scopes: str | None,
+    issuer_url: str | None,
+    token_exchange_endpoint: str | None,
+) -> None:
+    """Set up OIDC auth config in profile, prompting only for missing values."""
+    if issuer_url:
+        profile["auth"]["issuer_url"] = issuer_url
+    if not authorize_url:
+        authorize_url = typer.prompt("Authorization URL (full URL)")
+    if not token_url:
+        token_url = typer.prompt("Token URL (full URL)")
+    if not client_id:
+        client_id = typer.prompt("Client ID")
+    if not scopes:
+        scopes = typer.prompt("Scopes", default="openid")
+    redirect_uri_val = typer.prompt("Redirect URI (or leave blank for localhost callback)", default="")
+    if redirect_uri_val:
+        profile["auth"]["redirect_uri"] = redirect_uri_val
+    else:
+        cb_port = typer.prompt("Local callback port", default="8484")
+        profile["auth"]["callback_port"] = int(cb_port)
+    profile["auth"]["authorize_url"] = authorize_url
+    profile["auth"]["token_url"] = token_url
+    profile["auth"]["client_id"] = client_id
+    profile["auth"]["scopes"] = scopes
+    if token_exchange_endpoint:
+        profile["auth"]["token_exchange_endpoint"] = token_exchange_endpoint
+
+
+def _init_device_auth(
+    profile: dict,
+    device_config_url: str | None,
+    issuer_url: str | None,
+    client_id: str | None,
+    scopes: str | None,
+    token_exchange_endpoint: str | None,
+) -> None:
+    """Set up device flow auth config in profile, prompting only for missing values."""
+    if device_config_url:
+        profile["auth"]["device_config_url"] = device_config_url
+    elif issuer_url:
+        profile["auth"]["issuer_url"] = issuer_url
+    else:
+        use_discovery = typer.confirm("Use a device-config discovery URL?", default=False)
+        if use_discovery:
+            profile["auth"]["device_config_url"] = typer.prompt("Device config URL")
+        else:
+            use_issuer = typer.confirm("Use issuer URL for OIDC discovery?", default=True)
+            if use_issuer:
+                profile["auth"]["issuer_url"] = typer.prompt(
+                    "Issuer URL (e.g., https://accounts.google.com)"
+                )
+            else:
+                if not client_id:
+                    client_id = typer.prompt("OAuth Client ID")
+                device_ep = typer.prompt("Device authorization endpoint URL")
+                token_ep = typer.prompt("Token endpoint URL")
+                profile["auth"]["device_authorization_endpoint"] = device_ep
+                profile["auth"]["token_endpoint"] = token_ep
+
+    if not client_id and "client_id" not in profile["auth"]:
+        client_id = typer.prompt("OAuth Client ID")
+    if client_id:
+        profile["auth"]["client_id"] = client_id
+    if scopes:
+        profile["auth"]["scopes"] = scopes
+    if token_exchange_endpoint:
+        profile["auth"]["token_exchange_endpoint"] = token_exchange_endpoint
+
+
+def _init_auto_auth(
+    profile: dict,
+    issuer_url: str | None,
+    client_id: str | None,
+    scopes: str | None,
+    token_exchange_endpoint: str | None,
+) -> None:
+    """Set up auto-detect auth config in profile, prompting only for missing values."""
+    if not issuer_url:
+        issuer_url = typer.prompt("Issuer URL (e.g., https://accounts.google.com)")
+    profile["auth"]["issuer_url"] = issuer_url
+    if not client_id:
+        client_id = typer.prompt("OAuth Client ID")
+    profile["auth"]["client_id"] = client_id
+    if scopes:
+        profile["auth"]["scopes"] = scopes
+    if token_exchange_endpoint:
+        profile["auth"]["token_exchange_endpoint"] = token_exchange_endpoint
+
+
 # ── Commands: login ────────────────────────────────────────────────────────────
 @app.command("login")
 def cmd_login(
@@ -1486,17 +1831,24 @@ def cmd_login(
     password_stdin: Annotated[bool, typer.Option("--password-stdin", help="Read password from stdin")] = False,
     no_browser: Annotated[
         bool,
-        typer.Option("--no-browser", help="OIDC: print login URL instead of opening browser (for headless/SSH)"),
+        typer.Option("--no-browser", help="OIDC/device: print login URL instead of opening browser (for headless/SSH)"),
+    ] = False,
+    access_token: Annotated[str, typer.Option("--access-token", help="Inject a pre-obtained access token")] = "",
+    refresh_token: Annotated[str, typer.Option("--refresh-token", help="Inject a pre-obtained refresh token")] = "",
+    access_token_stdin: Annotated[
+        bool, typer.Option("--access-token-stdin", help="Read access token from stdin")
     ] = False,
 ) -> None:
     """Login to an API that uses OAuth/token-endpoint authentication.
 
-    Supports two auth modes:
+    Supports auth modes:
         - auth.type=bearer with token_endpoint: username/password grant
         - auth.type=oidc: Authorization Code + PKCE flow (browser or --no-browser)
+        - auth.type=device: OAuth 2.0 Device Authorization Grant (RFC 8628)
+        - auth.type=auto: auto-detect best flow from OIDC discovery
+        - --access-token / --access-token-stdin: inject a pre-obtained token
 
-    For OIDC, use --no-browser on headless machines: prints the login URL,
-    then prompts you to paste back the redirect URL after authenticating.
+    For OIDC/device, use --no-browser on headless machines.
 
     Password input methods (bearer mode, in priority order):
         1. --password-file /path/to/file
@@ -1506,23 +1858,38 @@ def cmd_login(
     """
     profile_name, profile = get_active_profile()
     auth_config = profile.get("auth", {})
+    auth_type = auth_config.get("type", "none")
 
-    # OIDC flow
-    if auth_config.get("type") == "oidc":
-        verify = profile.get("verify_ssl", True) and get_verify_ssl()
-        _oidc_login(auth_config, profile_name, no_browser=no_browser, verify=verify)
-        # Try fetching the spec now that we're authenticated
-        try:
-            spec = fetch_spec(profile, refresh=True)
-            endpoints = extract_endpoint_summaries(spec)
-            spec_title = spec.get("info", {}).get("title", "Unknown")
-            console.print(f"[green]Fetched spec: {spec_title} ({len(endpoints)} endpoints)[/green]")
-        except (typer.Exit, Exception):
-            pass
+    # Token injection — works with any auth type
+    if access_token or access_token_stdin:
+        _inject_token(profile_name, access_token, refresh_token, access_token_stdin)
         return
 
-    if auth_config.get("type") != "bearer" or not auth_config.get("token_endpoint"):
-        console.print("[yellow]Login is for profiles with bearer auth + token_endpoint, or oidc.[/yellow]")
+    # Auto-detect flow from OIDC discovery
+    if auth_type == "auto":
+        verify = profile.get("verify_ssl", True) and get_verify_ssl()
+        resolved_type = _auto_detect_flow(auth_config, verify=verify)
+        auth_type = resolved_type
+
+    # OIDC flow
+    if auth_type == "oidc":
+        verify = profile.get("verify_ssl", True) and get_verify_ssl()
+        base_url = profile.get("base_url", "").rstrip("/")
+        _oidc_login(auth_config, profile_name, no_browser=no_browser, verify=verify, base_url=base_url)
+        _try_post_login_spec_fetch(profile)
+        return
+
+    # Device flow
+    if auth_type == "device":
+        verify = profile.get("verify_ssl", True) and get_verify_ssl()
+        _device_login(auth_config, profile_name, profile, no_browser=no_browser, verify=verify)
+        _try_post_login_spec_fetch(profile)
+        return
+
+    if auth_type != "bearer" or not auth_config.get("token_endpoint"):
+        console.print(
+            "[yellow]Login is for profiles with bearer auth + token_endpoint, oidc, device, or auto.[/yellow]"
+        )
         console.print("[dim]If your API uses a static token or API key, set the environment variable instead.[/dim]")
         raise typer.Exit(1)
 
@@ -1594,21 +1961,102 @@ def cmd_login(
         console.print("[green]Logged in successfully![/green]")
         console.print(f"[dim]Token cached at {token_cache}[/dim]")
 
-        # Try fetching the spec now that we're authenticated
-        spec_url = _resolve_spec_url(profile)
-        cache_file, _ = _spec_cache_paths(spec_url)
-        if not cache_file.exists():
-            try:
-                spec = fetch_spec(profile, refresh=True)
-                endpoints = extract_endpoint_summaries(spec)
-                spec_title = spec.get("info", {}).get("title", "Unknown")
-                console.print(f"[green]Fetched spec: {spec_title} ({len(endpoints)} endpoints)[/green]")
-            except (typer.Exit, Exception):
-                pass  # Spec fetch is best-effort after login
+        _try_post_login_spec_fetch(profile)
 
     except httpx.ConnectError:
         console.print(f"[red]Cannot connect to {base_url}[/red]")
         raise typer.Exit(1)
+
+
+def _inject_token(profile_name: str, access_token: str, refresh_token: str, from_stdin: bool) -> None:
+    """Inject a pre-obtained token into the token cache."""
+    if from_stdin:
+        if sys.stdin.isatty():
+            console.print("[red]--access-token-stdin requires piped input.[/red]")
+            raise typer.Exit(1)
+        access_token = sys.stdin.read().strip()
+
+    if not access_token:
+        console.print("[red]No access token provided.[/red]")
+        raise typer.Exit(1)
+
+    token_data: dict = {"access_token": access_token}
+    if refresh_token:
+        token_data["refresh_token"] = refresh_token
+
+    # Try to extract exp from JWT payload (without validation)
+    try:
+        payload_b64 = access_token.split(".")[1]
+        # Add padding
+        padded = payload_b64 + "=" * (4 - len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        if "exp" in payload:
+            token_data["expires_at"] = payload["exp"]
+    except (IndexError, ValueError, json.JSONDecodeError, binascii.Error):
+        pass
+
+    if "expires_at" not in token_data:
+        token_data["expires_at"] = time.time() + 3600
+
+    token_cache = CACHE_DIR / f"{profile_name}_token.json"
+    ensure_dirs()
+    token_cache.write_text(json.dumps(token_data))
+    token_cache.chmod(0o600)
+
+    console.print("[green]Token injected successfully![/green]")
+    console.print(f"[dim]Token cached at {token_cache}[/dim]")
+
+
+def _auto_detect_flow(auth_config: dict, verify: bool = True) -> str:
+    """Auto-detect the best OAuth flow from OIDC discovery.
+
+    Returns 'device' if device_authorization_endpoint is available, else 'oidc'.
+    """
+    issuer_url = auth_config.get("issuer_url")
+    if not issuer_url:
+        console.print("[red]Auto auth type requires issuer_url.[/red]")
+        raise typer.Exit(1)
+
+    well_known_url = f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
+    try:
+        with httpx.Client(verify=verify, timeout=15.0) as client:
+            resp = client.get(well_known_url)
+        if resp.status_code != 200:
+            console.print(f"[red]Failed to fetch OIDC discovery ({resp.status_code})[/red]")
+            raise typer.Exit(1)
+
+        oidc_config = resp.json()
+    except (httpx.HTTPError, json.JSONDecodeError) as e:
+        console.print(f"[red]Failed to fetch OIDC discovery: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Check if device flow is supported
+    grant_types = oidc_config.get("grant_types_supported", [])
+    device_ep = oidc_config.get("device_authorization_endpoint")
+
+    if device_ep and "urn:ietf:params:oauth:grant-type:device_code" in grant_types:
+        # Populate auth_config with discovered endpoints for device flow
+        auth_config.setdefault("device_authorization_endpoint", device_ep)
+        auth_config.setdefault("token_endpoint", oidc_config.get("token_endpoint", ""))
+        console.print("[dim]Auto-detected: using device authorization flow[/dim]")
+        return "device"
+
+    # Fall back to PKCE
+    auth_config.setdefault("authorize_url", oidc_config.get("authorization_endpoint", ""))
+    auth_config.setdefault("token_url", oidc_config.get("token_endpoint", ""))
+    console.print("[dim]Auto-detected: using Authorization Code + PKCE flow[/dim]")
+    return "oidc"
+
+
+def _try_post_login_spec_fetch(profile: dict) -> None:
+    """Best-effort spec fetch after successful login."""
+    try:
+        spec = fetch_spec(profile, refresh=True)
+        endpoints = extract_endpoint_summaries(spec)
+        spec_title = spec.get("info", {}).get("title", "Unknown")
+        console.print(f"[green]Fetched spec: {spec_title} ({len(endpoints)} endpoints)[/green]")
+    except (typer.Exit, Exception):
+        pass
 
 
 @app.command("logout")
