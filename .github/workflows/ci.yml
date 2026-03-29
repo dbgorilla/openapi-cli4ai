@@ -22,8 +22,8 @@ jobs:
           enable-cache: true
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
-      - name: Run unit tests
-        run: uv run --python ${{ matrix.python-version }} --with pytest --with pyyaml --with typer --with httpx --with rich --with click --with tomli-w --with python-dotenv pytest tests/ -m "not integration" -v
+      - name: Run unit tests with coverage
+        run: uv run --python ${{ matrix.python-version }} --with pytest --with pytest-cov --with pyyaml --with typer --with httpx --with rich --with click --with tomli-w --with python-dotenv pytest tests/ -m "not integration" -v --cov=openapi_cli4ai --cov-report=term-missing
 
   lint:
     runs-on: ubuntu-latest
@@ -34,3 +34,11 @@ jobs:
         run: uvx ruff check .
       - name: Ruff format check
         run: uvx ruff format --check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: Run mypy
+        run: uv run --with mypy --with pyyaml --with typer --with httpx --with rich --with click --with tomli-w --with python-dotenv mypy src/openapi_cli4ai/ --ignore-missing-imports
