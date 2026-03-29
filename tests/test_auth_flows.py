@@ -17,6 +17,7 @@ from openapi_cli4ai import cli as cli_mod
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _write_token_cache(cache_dir, profile_name, token_data):
     """Write a token cache file and return its path."""
     token_file = cache_dir / f"{profile_name}_token.json"
@@ -38,15 +39,20 @@ def _mock_httpx_client(mock_response):
 # 1. _oauth_bearer
 # ===========================================================================
 
+
 class TestOAuthBearer:
     """Tests for _oauth_bearer (lines 420-446)."""
 
     def test_cached_token_valid(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_token_cache(cache_dir, "myapi", {
-            "access_token": "good-token",
-            "expires_at": time.time() + 3600,
-        })
+        _write_token_cache(
+            cache_dir,
+            "myapi",
+            {
+                "access_token": "good-token",
+                "expires_at": time.time() + 3600,
+            },
+        )
         profile = {"_name": "myapi", "base_url": "http://localhost"}
         auth_config = {"token_endpoint": "/auth/token"}
         result = mod._oauth_bearer(profile, auth_config)
@@ -54,11 +60,15 @@ class TestOAuthBearer:
 
     def test_cached_token_expired_refresh_succeeds(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_token_cache(cache_dir, "myapi", {
-            "access_token": "old-token",
-            "refresh_token": "rt-123",
-            "expires_at": time.time() - 100,
-        })
+        _write_token_cache(
+            cache_dir,
+            "myapi",
+            {
+                "access_token": "old-token",
+                "refresh_token": "rt-123",
+                "expires_at": time.time() - 100,
+            },
+        )
         profile = {"_name": "myapi", "base_url": "http://localhost"}
         auth_config = {
             "token_endpoint": "/auth/token",
@@ -80,10 +90,14 @@ class TestOAuthBearer:
 
     def test_cached_token_expired_no_refresh_endpoint(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_token_cache(cache_dir, "myapi", {
-            "access_token": "old-token",
-            "expires_at": time.time() - 100,
-        })
+        _write_token_cache(
+            cache_dir,
+            "myapi",
+            {
+                "access_token": "old-token",
+                "expires_at": time.time() - 100,
+            },
+        )
         profile = {"_name": "myapi", "base_url": "http://localhost"}
         auth_config = {"token_endpoint": "/auth/token"}
         with pytest.raises((SystemExit, ClickExit)):
@@ -109,6 +123,7 @@ class TestOAuthBearer:
 # ===========================================================================
 # 2. _try_refresh_token
 # ===========================================================================
+
 
 class TestTryRefreshToken:
     """Tests for _try_refresh_token (lines 449-476)."""
@@ -202,15 +217,20 @@ class TestTryRefreshToken:
 # 3. _oidc_auth with refresh
 # ===========================================================================
 
+
 class TestOidcAuth:
     """Tests for _oidc_auth (lines 482-511)."""
 
     def test_valid_cached_token(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_token_cache(cache_dir, "oidcprof", {
-            "access_token": "valid-oidc-token",
-            "expires_at": time.time() + 3600,
-        })
+        _write_token_cache(
+            cache_dir,
+            "oidcprof",
+            {
+                "access_token": "valid-oidc-token",
+                "expires_at": time.time() + 3600,
+            },
+        )
         profile = {"_name": "oidcprof"}
         auth_config = {
             "type": "oidc",
@@ -222,11 +242,15 @@ class TestOidcAuth:
 
     def test_expired_refresh_succeeds(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_token_cache(cache_dir, "oidcprof", {
-            "access_token": "expired-token",
-            "refresh_token": "oidc-rt-123",
-            "expires_at": time.time() - 100,
-        })
+        _write_token_cache(
+            cache_dir,
+            "oidcprof",
+            {
+                "access_token": "expired-token",
+                "refresh_token": "oidc-rt-123",
+                "expires_at": time.time() - 100,
+            },
+        )
         profile = {"_name": "oidcprof", "verify_ssl": True}
         auth_config = {
             "type": "oidc",
@@ -249,11 +273,15 @@ class TestOidcAuth:
 
     def test_expired_refresh_fails(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_token_cache(cache_dir, "oidcprof", {
-            "access_token": "expired-token",
-            "refresh_token": "oidc-rt-123",
-            "expires_at": time.time() - 100,
-        })
+        _write_token_cache(
+            cache_dir,
+            "oidcprof",
+            {
+                "access_token": "expired-token",
+                "refresh_token": "oidc-rt-123",
+                "expires_at": time.time() - 100,
+            },
+        )
         profile = {"_name": "oidcprof", "verify_ssl": True}
         auth_config = {
             "type": "oidc",
@@ -283,6 +311,7 @@ class TestOidcAuth:
 # ===========================================================================
 # 4. _oidc_refresh
 # ===========================================================================
+
 
 class TestOidcRefresh:
     """Tests for _oidc_refresh (lines 514-534)."""
@@ -354,6 +383,7 @@ class TestOidcRefresh:
 # 5. _oidc_login
 # ===========================================================================
 
+
 class TestOidcLogin:
     """Tests for _oidc_login (lines 582-640)."""
 
@@ -365,8 +395,10 @@ class TestOidcLogin:
             "client_id": "my-client",
             "scopes": "openid profile",
         }
-        with patch.object(mod, "_oidc_login_browser", return_value="auth-code-123"), \
-             patch.object(mod, "_oidc_exchange_code") as mock_exchange:
+        with (
+            patch.object(mod, "_oidc_login_browser", return_value="auth-code-123"),
+            patch.object(mod, "_oidc_exchange_code") as mock_exchange,
+        ):
             mod._oidc_login(auth_config, "testprof", no_browser=False, verify=True)
         mock_exchange.assert_called_once()
         call_kwargs = mock_exchange.call_args
@@ -379,8 +411,10 @@ class TestOidcLogin:
             "token_url": "https://idp.example.com/token",
             "client_id": "my-client",
         }
-        with patch.object(mod, "_oidc_login_no_browser", return_value="nb-code-456"), \
-             patch.object(mod, "_oidc_exchange_code") as mock_exchange:
+        with (
+            patch.object(mod, "_oidc_login_no_browser", return_value="nb-code-456"),
+            patch.object(mod, "_oidc_exchange_code") as mock_exchange,
+        ):
             mod._oidc_login(auth_config, "testprof", no_browser=True, verify=True)
         mock_exchange.assert_called_once()
         call_kwargs = mock_exchange.call_args
@@ -415,12 +449,12 @@ class TestOidcLogin:
 # 6. _oidc_login_browser
 # ===========================================================================
 
+
 class TestOidcLoginBrowser:
     """Tests for _oidc_login_browser (lines 643-666)."""
 
     def test_successful_callback(self):
-        with patch("openapi_cli4ai.cli.HTTPServer") as MockServer, \
-             patch("openapi_cli4ai.cli.webbrowser"):
+        with patch("openapi_cli4ai.cli.HTTPServer") as MockServer, patch("openapi_cli4ai.cli.webbrowser"):
             mock_server = MagicMock()
             MockServer.return_value = mock_server
 
@@ -435,8 +469,7 @@ class TestOidcLoginBrowser:
         assert result == "browser-code-789"
 
     def test_callback_with_error(self):
-        with patch("openapi_cli4ai.cli.HTTPServer") as MockServer, \
-             patch("openapi_cli4ai.cli.webbrowser"):
+        with patch("openapi_cli4ai.cli.HTTPServer") as MockServer, patch("openapi_cli4ai.cli.webbrowser"):
             mock_server = MagicMock()
             MockServer.return_value = mock_server
 
@@ -450,8 +483,7 @@ class TestOidcLoginBrowser:
                 cli_mod._oidc_login_browser("https://idp/auth?...", 8484, "state-abc")
 
     def test_no_auth_code_received(self):
-        with patch("openapi_cli4ai.cli.HTTPServer") as MockServer, \
-             patch("openapi_cli4ai.cli.webbrowser"):
+        with patch("openapi_cli4ai.cli.HTTPServer") as MockServer, patch("openapi_cli4ai.cli.webbrowser"):
             mock_server = MagicMock()
             MockServer.return_value = mock_server
 
@@ -468,6 +500,7 @@ class TestOidcLoginBrowser:
 # ===========================================================================
 # 7. _oidc_login_no_browser
 # ===========================================================================
+
 
 class TestOidcLoginNoBrowser:
     """Tests for _oidc_login_no_browser (lines 669-692)."""
@@ -494,6 +527,7 @@ class TestOidcLoginNoBrowser:
 # ===========================================================================
 # 8. _oidc_exchange_code
 # ===========================================================================
+
 
 class TestOidcExchangeCode:
     """Tests for _oidc_exchange_code (lines 695-747)."""
@@ -551,6 +585,7 @@ class TestOidcExchangeCode:
     def test_connect_error(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
         import httpx as httpx_mod
+
         with patch("httpx.Client") as MockClient:
             mc = MagicMock()
             mc.post.side_effect = httpx_mod.ConnectError("Connection refused")
@@ -580,8 +615,10 @@ class TestOidcExchangeCode:
             "expires_in": 7200,
         }
         auth_config = {"token_exchange_endpoint": "/api/token-exchange"}
-        with patch("httpx.Client") as MockClient, \
-             patch.object(mod, "_token_exchange", return_value=exchanged_data) as mock_te:
+        with (
+            patch("httpx.Client") as MockClient,
+            patch.object(mod, "_token_exchange", return_value=exchanged_data) as mock_te,
+        ):
             mc = MagicMock()
             mc.post.return_value = mock_resp
             MockClient.return_value.__enter__ = MagicMock(return_value=mc)
@@ -658,12 +695,14 @@ class TestOidcExchangeCode:
 # 9. fetch_spec
 # ===========================================================================
 
+
 class TestFetchSpec:
     """Tests for fetch_spec (lines 197-256)."""
 
     def _write_spec_cache(self, cache_dir, profile, spec, fetched_at=None):
         """Helper to write spec cache files matching how fetch_spec expects them."""
         import hashlib
+
         spec_url = cli_mod._resolve_spec_url(profile)
         url_hash = hashlib.sha256(spec_url.encode()).hexdigest()[:12]
         cache_file = cache_dir / f"spec_{url_hash}.json"
@@ -793,6 +832,7 @@ class TestFetchSpec:
         profile = {"base_url": "https://api.example.com", "auth": {"type": "none"}}
         # Write corrupted cache
         import hashlib
+
         spec_url = cli_mod._resolve_spec_url(profile)
         url_hash = hashlib.sha256(spec_url.encode()).hexdigest()[:12]
         cache_file = cache_dir / f"spec_{url_hash}.json"
@@ -820,6 +860,7 @@ class TestFetchSpec:
 # 10. load_profiles
 # ===========================================================================
 
+
 class TestLoadProfiles:
     """Tests for load_profiles (lines 119-131)."""
 
@@ -832,6 +873,7 @@ class TestLoadProfiles:
     def test_valid_toml(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
         import tomli_w
+
         data = {
             "active_profile": "myapi",
             "profiles": {
@@ -852,6 +894,7 @@ class TestLoadProfiles:
     def test_toml_without_profiles_key(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
         import tomli_w
+
         data = {"active_profile": "myapi"}
         mod.CONFIG_FILE.write_text(tomli_w.dumps(data))
         result = mod.load_profiles()
@@ -862,12 +905,14 @@ class TestLoadProfiles:
 # 11. get_active_profile
 # ===========================================================================
 
+
 class TestGetActiveProfile:
     """Tests for get_active_profile (lines 156-178)."""
 
     def test_no_profiles_exits(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
         import tomli_w
+
         data = {"profiles": {}}
         mod.CONFIG_FILE.write_text(tomli_w.dumps(data))
         with pytest.raises((SystemExit, ClickExit)):
@@ -876,6 +921,7 @@ class TestGetActiveProfile:
     def test_env_var_override(self, tmp_config, monkeypatch):
         mod, tmp_path, cache_dir = tmp_config
         import tomli_w
+
         data = {
             "active_profile": "first",
             "profiles": {
@@ -892,6 +938,7 @@ class TestGetActiveProfile:
     def test_active_profile_from_config(self, tmp_config, monkeypatch):
         mod, tmp_path, cache_dir = tmp_config
         import tomli_w
+
         monkeypatch.delenv("OAC_PROFILE", raising=False)
         data = {
             "active_profile": "myapi",
@@ -907,6 +954,7 @@ class TestGetActiveProfile:
     def test_falls_back_to_first_profile(self, tmp_config, monkeypatch):
         mod, tmp_path, cache_dir = tmp_config
         import tomli_w
+
         monkeypatch.delenv("OAC_PROFILE", raising=False)
         data = {
             "active_profile": "nonexistent",
@@ -923,6 +971,7 @@ class TestGetActiveProfile:
 # ===========================================================================
 # 12. _resolve_env_vars
 # ===========================================================================
+
 
 class TestResolveEnvVars:
     """Tests for _resolve_env_vars (lines 142-153)."""
@@ -964,11 +1013,11 @@ class TestResolveEnvVars:
 # 13. handle_response
 # ===========================================================================
 
+
 class TestHandleResponse:
     """Tests for handle_response (lines 1064-1098)."""
 
-    def _make_response(self, status_code=200, content_type="application/json",
-                       json_data=None, text=None, reason="OK"):
+    def _make_response(self, status_code=200, content_type="application/json", json_data=None, text=None, reason="OK"):
         resp = MagicMock()
         resp.status_code = status_code
         resp.headers = {"content-type": content_type}
@@ -1001,8 +1050,7 @@ class TestHandleResponse:
         assert '"key": "value"' in captured.out
 
     def test_400_json_error(self):
-        resp = self._make_response(status_code=400, json_data={"message": "Bad Request"},
-                                   reason="Bad Request")
+        resp = self._make_response(status_code=400, json_data={"message": "Bad Request"}, reason="Bad Request")
         # Should call _display_error, not raise
         cli_mod.handle_response(resp)
 
@@ -1024,6 +1072,7 @@ class TestHandleResponse:
 # 14. _display_error
 # ===========================================================================
 
+
 class TestDisplayError:
     """Tests for _display_error (lines 1101-1119)."""
 
@@ -1040,16 +1089,22 @@ class TestDisplayError:
         cli_mod._display_error("Raw error string", 500)
 
     def test_dict_with_errors_list(self):
-        cli_mod._display_error({
-            "message": "Validation failed",
-            "errors": ["field1 is required", "field2 must be positive"],
-        }, 422)
+        cli_mod._display_error(
+            {
+                "message": "Validation failed",
+                "errors": ["field1 is required", "field2 must be positive"],
+            },
+            422,
+        )
 
     def test_dict_with_documentation_url(self):
-        cli_mod._display_error({
-            "message": "Rate limited",
-            "documentation_url": "https://docs.example.com/rate-limits",
-        }, 429)
+        cli_mod._display_error(
+            {
+                "message": "Rate limited",
+                "documentation_url": "https://docs.example.com/rate-limits",
+            },
+            429,
+        )
 
     def test_dict_fallback_to_str(self):
         cli_mod._display_error({"unknown_key": "val"}, 500)
@@ -1058,6 +1113,7 @@ class TestDisplayError:
 # ===========================================================================
 # 15. make_request
 # ===========================================================================
+
 
 class TestMakeRequest:
     """Tests for make_request (lines 1029-1061)."""
@@ -1092,8 +1148,7 @@ class TestMakeRequest:
             mc.request.return_value = MagicMock(status_code=200)
             MockClient.return_value.__enter__ = MagicMock(return_value=mc)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
-            cli_mod.make_request(profile, "POST", "/data",
-                                 extra_headers={"X-Custom": "val"})
+            cli_mod.make_request(profile, "POST", "/data", extra_headers={"X-Custom": "val"})
         call_kwargs = mc.request.call_args
         assert call_kwargs.kwargs["headers"]["X-Custom"] == "val"
         assert call_kwargs.kwargs["headers"]["Accept"] == "application/json"
@@ -1114,6 +1169,7 @@ class TestMakeRequest:
 # ===========================================================================
 # 16. _get_password
 # ===========================================================================
+
 
 class TestGetPassword:
     """Tests for _get_password (lines 1006-1025)."""
@@ -1154,6 +1210,7 @@ class TestGetPassword:
 # 17. set_insecure_mode / get_verify_ssl
 # ===========================================================================
 
+
 class TestInsecureMode:
     """Tests for set_insecure_mode and get_verify_ssl (lines 103-109)."""
 
@@ -1171,6 +1228,7 @@ class TestInsecureMode:
 # ===========================================================================
 # 18. _resolve_spec_url / _spec_cache_paths
 # ===========================================================================
+
 
 class TestResolveSpecUrl:
     """Tests for _resolve_spec_url and _spec_cache_paths (lines 182-194)."""

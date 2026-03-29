@@ -20,6 +20,7 @@ runner = CliRunner()
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 
+
 def _write_config(config_file, profiles_data):
     config_file.write_text(tomli_w.dumps(profiles_data))
 
@@ -72,6 +73,7 @@ PETSTORE_SPEC = {
 
 
 # ── _OIDCCallbackHandler.do_GET coverage (lines 545-574, 579) ────────────────
+
 
 class TestOIDCCallbackHandler:
     def test_successful_code_callback(self, cli_module):
@@ -135,6 +137,7 @@ class TestOIDCCallbackHandler:
 
 # ── cmd_call streaming path (lines 1349-1368) ────────────────────────────────
 
+
 class TestCmdCallStreaming:
     def test_call_streaming_success(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
@@ -181,6 +184,7 @@ class TestCmdCallStreaming:
 
 # ── cmd_run streaming path (lines 1527-1544) ─────────────────────────────────
 
+
 class TestCmdRunStreaming:
     def test_run_streaming_success(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
@@ -195,8 +199,7 @@ class TestCmdRunStreaming:
         mock_client.stream.return_value.__enter__ = MagicMock(return_value=mock_stream_response)
         mock_client.stream.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("httpx.Client") as MockClient, \
-             patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
+        with patch("httpx.Client") as MockClient, patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             result = runner.invoke(app, ["run", "listPets", "--stream"])
@@ -217,8 +220,7 @@ class TestCmdRunStreaming:
         mock_client.stream.return_value.__enter__ = MagicMock(return_value=mock_stream_response)
         mock_client.stream.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("httpx.Client") as MockClient, \
-             patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
+        with patch("httpx.Client") as MockClient, patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             result = runner.invoke(app, ["run", "listPets", "--stream"])
@@ -227,6 +229,7 @@ class TestCmdRunStreaming:
 
 
 # ── cmd_init auth setup paths (lines 1603-1690) ──────────────────────────────
+
 
 class TestCmdInitAuthSetup:
     def _mock_spec_response(self, spec=None):
@@ -244,7 +247,8 @@ class TestCmdInitAuthSetup:
 
         with patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             result = runner.invoke(
-                app, ["init", "myapi", "--url", "https://api.example.com", "--auth", "bearer", "--spec", "/api.json"],
+                app,
+                ["init", "myapi", "--url", "https://api.example.com", "--auth", "bearer", "--spec", "/api.json"],
                 input="static\nMY_TOKEN\n",
             )
 
@@ -257,7 +261,8 @@ class TestCmdInitAuthSetup:
 
         with patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             result = runner.invoke(
-                app, ["init", "myapi", "--url", "https://api.example.com", "--auth", "bearer", "--spec", "/api.json"],
+                app,
+                ["init", "myapi", "--url", "https://api.example.com", "--auth", "bearer", "--spec", "/api.json"],
                 input="login\n/api/auth/token\n/api/auth/refresh\n",
             )
 
@@ -270,7 +275,8 @@ class TestCmdInitAuthSetup:
 
         with patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             result = runner.invoke(
-                app, ["init", "myapi", "--url", "https://api.example.com", "--auth", "oidc", "--spec", "/api.json"],
+                app,
+                ["init", "myapi", "--url", "https://api.example.com", "--auth", "oidc", "--spec", "/api.json"],
                 input="https://auth.example.com/authorize\nhttps://auth.example.com/token\nmy-client\nopenid\n\n8484\n",
             )
 
@@ -283,7 +289,8 @@ class TestCmdInitAuthSetup:
 
         with patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             result = runner.invoke(
-                app, ["init", "myapi", "--url", "https://api.example.com", "--auth", "api-key", "--spec", "/api.json"],
+                app,
+                ["init", "myapi", "--url", "https://api.example.com", "--auth", "api-key", "--spec", "/api.json"],
                 input="MY_KEY\nAuthorization\nBearer \n",
             )
 
@@ -296,7 +303,8 @@ class TestCmdInitAuthSetup:
 
         with patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             result = runner.invoke(
-                app, ["init", "myapi", "--url", "https://api.example.com", "--auth", "basic", "--spec", "/api.json"],
+                app,
+                ["init", "myapi", "--url", "https://api.example.com", "--auth", "basic", "--spec", "/api.json"],
                 input="MY_USER\nMY_PASS\n",
             )
 
@@ -309,13 +317,20 @@ class TestCmdInitAuthSetup:
 
         with patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             result = runner.invoke(
-                app, [
-                    "init", "myapi",
-                    "--url", "https://api.example.com",
-                    "--auth", "device",
-                    "--issuer-url", "https://auth.example.com",
-                    "--client-id", "my-cli",
-                    "--spec", "/api.json",
+                app,
+                [
+                    "init",
+                    "myapi",
+                    "--url",
+                    "https://api.example.com",
+                    "--auth",
+                    "device",
+                    "--issuer-url",
+                    "https://auth.example.com",
+                    "--client-id",
+                    "my-cli",
+                    "--spec",
+                    "/api.json",
                 ],
             )
 
@@ -328,13 +343,20 @@ class TestCmdInitAuthSetup:
 
         with patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             result = runner.invoke(
-                app, [
-                    "init", "myapi",
-                    "--url", "https://api.example.com",
-                    "--auth", "auto",
-                    "--issuer-url", "https://auth.example.com",
-                    "--client-id", "my-cli",
-                    "--spec", "/api.json",
+                app,
+                [
+                    "init",
+                    "myapi",
+                    "--url",
+                    "https://api.example.com",
+                    "--auth",
+                    "auto",
+                    "--issuer-url",
+                    "https://auth.example.com",
+                    "--client-id",
+                    "my-cli",
+                    "--spec",
+                    "/api.json",
                 ],
             )
 
@@ -352,12 +374,12 @@ class TestCmdInitAuthSetup:
         mock_client = MagicMock()
         mock_client.get.return_value = mock_resp
 
-        with patch("httpx.Client") as MockClient, \
-             patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
+        with patch("httpx.Client") as MockClient, patch.object(mod, "fetch_spec", return_value=PETSTORE_SPEC):
             MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             result = runner.invoke(
-                app, ["init", "myapi", "--url", "https://api.example.com", "--auth", "none"],
+                app,
+                ["init", "myapi", "--url", "https://api.example.com", "--auth", "none"],
                 input="/my-spec.json\n",
             )
 
@@ -366,18 +388,21 @@ class TestCmdInitAuthSetup:
 
 # ── cmd_login for oidc, device, auto paths ────────────────────────────────────
 
+
 class TestCmdLoginFlows:
     def test_login_oidc_flow(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_config(mod.CONFIG_FILE, _make_profile_config(
-            "oidc",
-            authorize_url="https://auth.example.com/authorize",
-            token_url="https://auth.example.com/token",
-            client_id="my-client",
-        ))
+        _write_config(
+            mod.CONFIG_FILE,
+            _make_profile_config(
+                "oidc",
+                authorize_url="https://auth.example.com/authorize",
+                token_url="https://auth.example.com/token",
+                client_id="my-client",
+            ),
+        )
 
-        with patch.object(mod, "_oidc_login") as mock_login, \
-             patch.object(mod, "_try_post_login_spec_fetch"):
+        with patch.object(mod, "_oidc_login") as mock_login, patch.object(mod, "_try_post_login_spec_fetch"):
             result = runner.invoke(app, ["login", "--no-browser"])
 
         assert result.exit_code == 0
@@ -385,15 +410,17 @@ class TestCmdLoginFlows:
 
     def test_login_device_flow(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_config(mod.CONFIG_FILE, _make_profile_config(
-            "device",
-            device_authorization_endpoint="https://auth.example.com/device",
-            token_endpoint="https://auth.example.com/token",
-            client_id="my-cli",
-        ))
+        _write_config(
+            mod.CONFIG_FILE,
+            _make_profile_config(
+                "device",
+                device_authorization_endpoint="https://auth.example.com/device",
+                token_endpoint="https://auth.example.com/token",
+                client_id="my-cli",
+            ),
+        )
 
-        with patch.object(mod, "_device_login") as mock_login, \
-             patch.object(mod, "_try_post_login_spec_fetch"):
+        with patch.object(mod, "_device_login") as mock_login, patch.object(mod, "_try_post_login_spec_fetch"):
             result = runner.invoke(app, ["login", "--no-browser"])
 
         assert result.exit_code == 0
@@ -401,15 +428,20 @@ class TestCmdLoginFlows:
 
     def test_login_auto_flow(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_config(mod.CONFIG_FILE, _make_profile_config(
-            "auto",
-            issuer_url="https://auth.example.com",
-            client_id="my-cli",
-        ))
+        _write_config(
+            mod.CONFIG_FILE,
+            _make_profile_config(
+                "auto",
+                issuer_url="https://auth.example.com",
+                client_id="my-cli",
+            ),
+        )
 
-        with patch.object(mod, "_auto_detect_flow", return_value="device") as mock_detect, \
-             patch.object(mod, "_device_login") as mock_login, \
-             patch.object(mod, "_try_post_login_spec_fetch"):
+        with (
+            patch.object(mod, "_auto_detect_flow", return_value="device") as mock_detect,
+            patch.object(mod, "_device_login") as mock_login,
+            patch.object(mod, "_try_post_login_spec_fetch"),
+        ):
             result = runner.invoke(app, ["login", "--no-browser"])
 
         assert result.exit_code == 0
@@ -418,19 +450,29 @@ class TestCmdLoginFlows:
 
     def test_login_bearer_password_stdin(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_config(mod.CONFIG_FILE, _make_profile_config(
-            "bearer",
-            token_endpoint="/api/auth/token",
-        ))
+        _write_config(
+            mod.CONFIG_FILE,
+            _make_profile_config(
+                "bearer",
+                token_endpoint="/api/auth/token",
+            ),
+        )
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"access_token": "tok", "expires_in": 3600}
         mock_resp.headers = {"content-type": "application/json"}
 
-        with patch("httpx.Client") as MockClient, \
-             patch.object(mod, "_try_post_login_spec_fetch"), \
-             patch("sys.stdin", new_callable=lambda: lambda: MagicMock(isatty=MagicMock(return_value=False), read=MagicMock(return_value="mypassword\n"))):
+        with (
+            patch("httpx.Client") as MockClient,
+            patch.object(mod, "_try_post_login_spec_fetch"),
+            patch(
+                "sys.stdin",
+                new_callable=lambda: lambda: MagicMock(
+                    isatty=MagicMock(return_value=False), read=MagicMock(return_value="mypassword\n")
+                ),
+            ),
+        ):
             mock_client = MagicMock()
             mock_client.post.return_value = mock_resp
             MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -442,20 +484,26 @@ class TestCmdLoginFlows:
 
     def test_login_bearer_password_file_not_found(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_config(mod.CONFIG_FILE, _make_profile_config(
-            "bearer",
-            token_endpoint="/api/auth/token",
-        ))
+        _write_config(
+            mod.CONFIG_FILE,
+            _make_profile_config(
+                "bearer",
+                token_endpoint="/api/auth/token",
+            ),
+        )
 
         result = runner.invoke(app, ["login", "-u", "user", "--password-file", "/nonexistent/password.txt"])
         assert result.exit_code == 1
 
     def test_login_bearer_connect_error(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_config(mod.CONFIG_FILE, _make_profile_config(
-            "bearer",
-            token_endpoint="/api/auth/token",
-        ))
+        _write_config(
+            mod.CONFIG_FILE,
+            _make_profile_config(
+                "bearer",
+                token_endpoint="/api/auth/token",
+            ),
+        )
 
         with patch("httpx.Client") as MockClient:
             mock_client = MagicMock()
@@ -468,18 +516,20 @@ class TestCmdLoginFlows:
 
     def test_login_bearer_no_expires_in(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
-        _write_config(mod.CONFIG_FILE, _make_profile_config(
-            "bearer",
-            token_endpoint="/api/auth/token",
-        ))
+        _write_config(
+            mod.CONFIG_FILE,
+            _make_profile_config(
+                "bearer",
+                token_endpoint="/api/auth/token",
+            ),
+        )
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"access_token": "tok"}  # No expires_in
         mock_resp.headers = {"content-type": "application/json"}
 
-        with patch("httpx.Client") as MockClient, \
-             patch.object(mod, "_try_post_login_spec_fetch"):
+        with patch("httpx.Client") as MockClient, patch.object(mod, "_try_post_login_spec_fetch"):
             mock_client = MagicMock()
             mock_client.post.return_value = mock_resp
             MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
@@ -493,6 +543,7 @@ class TestCmdLoginFlows:
 
 # ── _inject_token stdin tty check (lines 1975-1976) ──────────────────────────
 
+
 class TestInjectTokenStdin:
     def test_stdin_tty_exits(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
@@ -504,14 +555,13 @@ class TestInjectTokenStdin:
 
 # ── _auto_detect_flow error paths (lines 2025-2031) ─────────────────────────
 
+
 class TestAutoDetectFlowErrors:
     def test_non_200_discovery(self, cli_module):
         mock_resp = MagicMock()
         mock_resp.status_code = 404
         with patch("httpx.Client") as MockClient:
-            MockClient.return_value.__enter__ = MagicMock(
-                return_value=MagicMock(get=MagicMock(return_value=mock_resp))
-            )
+            MockClient.return_value.__enter__ = MagicMock(return_value=MagicMock(get=MagicMock(return_value=mock_resp)))
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             with pytest.raises((SystemExit, ClickExit)):
                 cli_module._auto_detect_flow({"issuer_url": "https://auth.example.com"})
@@ -528,6 +578,7 @@ class TestAutoDetectFlowErrors:
 
 # ── _try_post_login_spec_fetch (lines 2053-2059) ────────────────────────────
 
+
 class TestTryPostLoginSpecFetch:
     def test_success(self, cli_module, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
@@ -543,6 +594,7 @@ class TestTryPostLoginSpecFetch:
 
 
 # ── handle_response edge cases (lines 1070, 1074) ───────────────────────────
+
 
 class TestHandleResponseEdgeCases:
     def test_300_status_yellow(self, cli_module):
@@ -564,6 +616,7 @@ class TestHandleResponseEdgeCases:
 
 # ── stream_sse status without tool_name (lines 1178-1179) ───────────────────
 
+
 class TestStreamSseStatusNoTool:
     def test_status_event_without_tool_name_not_running(self, cli_module):
         mock_resp = MagicMock()
@@ -577,22 +630,20 @@ class TestStreamSseStatusNoTool:
 
 # ── _route_inputs cookie param and body fallback (lines 1410, 1419) ──────────
 
+
 class TestRouteInputsEdgeCases:
     def test_cookie_param_treated_as_query(self, cli_module):
         params = [{"name": "session", "in": "cookie"}]
-        path_p, query_p, header_p, body = cli_module._route_inputs(
-            {"session": "abc"}, params, False
-        )
+        path_p, query_p, header_p, body = cli_module._route_inputs({"session": "abc"}, params, False)
         assert query_p == {"session": "abc"}
 
     def test_all_input_becomes_body_when_request_body_no_params(self, cli_module):
-        path_p, query_p, header_p, body = cli_module._route_inputs(
-            {"name": "Rex", "status": "available"}, [], True
-        )
+        path_p, query_p, header_p, body = cli_module._route_inputs({"name": "Rex", "status": "available"}, [], True)
         assert body == {"name": "Rex", "status": "available"}
 
 
 # ── _init_device_auth interactive prompts (lines 1776-1794) ──────────────────
+
 
 class TestInitDeviceAuthInteractive:
     def test_device_config_url_prompt(self, cli_module, monkeypatch):
@@ -625,6 +676,7 @@ class TestInitDeviceAuthInteractive:
 
 # ── _init_auto_auth interactive prompts (lines 1812, 1815, 1820) ─────────────
 
+
 class TestInitAutoAuthInteractive:
     def test_prompts_for_missing_values(self, cli_module, monkeypatch):
         profile = {"auth": {"type": "auto"}}
@@ -643,16 +695,19 @@ class TestInitAutoAuthInteractive:
 
 # ── _init_oidc_auth interactive prompts (lines 1739-1750) ────────────────────
 
+
 class TestInitOidcAuthInteractive:
     def test_prompts_for_missing_values(self, cli_module, monkeypatch):
         profile = {"auth": {"type": "oidc"}}
-        prompts = iter([
-            "https://auth.example.com/authorize",
-            "https://auth.example.com/token",
-            "my-client",
-            "openid",
-            "http://localhost:8484/callback",  # redirect_uri
-        ])
+        prompts = iter(
+            [
+                "https://auth.example.com/authorize",
+                "https://auth.example.com/token",
+                "my-client",
+                "openid",
+                "http://localhost:8484/callback",  # redirect_uri
+            ]
+        )
         monkeypatch.setattr("typer.prompt", lambda *a, **kw: next(prompts))
         cli_module._init_oidc_auth(profile, None, None, None, None, None, None)
         assert profile["auth"]["authorize_url"] == "https://auth.example.com/authorize"
@@ -663,13 +718,19 @@ class TestInitOidcAuthInteractive:
         prompts = iter(["", "8484"])
         monkeypatch.setattr("typer.prompt", lambda *a, **kw: next(prompts))
         cli_module._init_oidc_auth(
-            profile, "https://auth/authorize", "https://auth/token",
-            "my-client", "openid", "https://auth.example.com", None,
+            profile,
+            "https://auth/authorize",
+            "https://auth/token",
+            "my-client",
+            "openid",
+            "https://auth.example.com",
+            None,
         )
         assert profile["auth"]["issuer_url"] == "https://auth.example.com"
 
 
 # ── _device_login error paths (lines 884-889, 906, etc.) ────────────────────
+
 
 class TestDeviceLoginErrors:
     def test_device_code_request_non_200(self, cli_module, tmp_config):
@@ -722,9 +783,11 @@ class TestDeviceLoginErrors:
         device_resp = MagicMock()
         device_resp.status_code = 200
         device_resp.json.return_value = {
-            "device_code": "DEV", "user_code": "CODE",
+            "device_code": "DEV",
+            "user_code": "CODE",
             "verification_uri": "https://auth.example.com/device",
-            "expires_in": 600, "interval": 0,
+            "expires_in": 600,
+            "interval": 0,
         }
 
         success_resp = MagicMock()
@@ -737,14 +800,14 @@ class TestDeviceLoginErrors:
         poll_client.post.return_value = success_resp
         clients = iter([device_client, poll_client])
 
-        with patch("httpx.Client") as MockClient, \
-             patch("webbrowser.open") as mock_browser, \
-             patch("time.sleep"):
+        with patch("httpx.Client") as MockClient, patch("webbrowser.open") as mock_browser, patch("time.sleep"):
+
             def make_ctx(*a, **kw):
                 ctx = MagicMock()
                 ctx.__enter__ = MagicMock(return_value=next(clients))
                 ctx.__exit__ = MagicMock(return_value=False)
                 return ctx
+
             MockClient.side_effect = make_ctx
             mod._device_login(auth_config, "test", profile, no_browser=False)
 
@@ -762,9 +825,11 @@ class TestDeviceLoginErrors:
         device_resp = MagicMock()
         device_resp.status_code = 200
         device_resp.json.return_value = {
-            "device_code": "DEV", "user_code": "CODE",
+            "device_code": "DEV",
+            "user_code": "CODE",
             "verification_uri": "https://auth.example.com/device",
-            "expires_in": 600, "interval": 0,
+            "expires_in": 600,
+            "interval": 0,
         }
 
         expired_resp = MagicMock()
@@ -778,11 +843,13 @@ class TestDeviceLoginErrors:
         clients = iter([device_client, poll_client])
 
         with patch("httpx.Client") as MockClient, patch("webbrowser.open"), patch("time.sleep"):
+
             def make_ctx(*a, **kw):
                 ctx = MagicMock()
                 ctx.__enter__ = MagicMock(return_value=next(clients))
                 ctx.__exit__ = MagicMock(return_value=False)
                 return ctx
+
             MockClient.side_effect = make_ctx
             with pytest.raises((SystemExit, ClickExit)):
                 mod._device_login(auth_config, "test", profile, no_browser=True)
@@ -799,9 +866,11 @@ class TestDeviceLoginErrors:
         device_resp = MagicMock()
         device_resp.status_code = 200
         device_resp.json.return_value = {
-            "device_code": "DEV", "user_code": "CODE",
+            "device_code": "DEV",
+            "user_code": "CODE",
             "verification_uri": "https://auth.example.com/device",
-            "expires_in": 600, "interval": 0,
+            "expires_in": 600,
+            "interval": 0,
         }
 
         error_resp = MagicMock()
@@ -815,11 +884,13 @@ class TestDeviceLoginErrors:
         clients = iter([device_client, poll_client])
 
         with patch("httpx.Client") as MockClient, patch("webbrowser.open"), patch("time.sleep"):
+
             def make_ctx(*a, **kw):
                 ctx = MagicMock()
                 ctx.__enter__ = MagicMock(return_value=next(clients))
                 ctx.__exit__ = MagicMock(return_value=False)
                 return ctx
+
             MockClient.side_effect = make_ctx
             with pytest.raises((SystemExit, ClickExit)):
                 mod._device_login(auth_config, "test", profile, no_browser=True)
@@ -837,9 +908,11 @@ class TestDeviceLoginErrors:
         device_resp = MagicMock()
         device_resp.status_code = 200
         device_resp.json.return_value = {
-            "device_code": "DEV", "user_code": "CODE",
+            "device_code": "DEV",
+            "user_code": "CODE",
             "verification_uri": "https://auth.example.com/device",
-            "expires_in": 600, "interval": 0,
+            "expires_in": 600,
+            "interval": 0,
         }
 
         success_resp = MagicMock()
@@ -854,11 +927,13 @@ class TestDeviceLoginErrors:
         clients = iter([device_client, poll_client])
 
         with patch("httpx.Client") as MockClient, patch("webbrowser.open"), patch("time.sleep"):
+
             def make_ctx(*a, **kw):
                 ctx = MagicMock()
                 ctx.__enter__ = MagicMock(return_value=next(clients))
                 ctx.__exit__ = MagicMock(return_value=False)
                 return ctx
+
             MockClient.side_effect = make_ctx
             mod._device_login(auth_config, "test", profile, no_browser=True)
 
@@ -875,9 +950,11 @@ class TestDeviceLoginErrors:
         device_resp = MagicMock()
         device_resp.status_code = 200
         device_resp.json.return_value = {
-            "device_code": "DEV", "user_code": "CODE",
+            "device_code": "DEV",
+            "user_code": "CODE",
             "verification_uri": "https://auth.example.com/device",
-            "expires_in": 600, "interval": 0,
+            "expires_in": 600,
+            "interval": 0,
         }
 
         bad_resp = MagicMock()
@@ -895,16 +972,19 @@ class TestDeviceLoginErrors:
         clients = iter([device_client, poll_client])
 
         with patch("httpx.Client") as MockClient, patch("webbrowser.open"), patch("time.sleep"):
+
             def make_ctx(*a, **kw):
                 ctx = MagicMock()
                 ctx.__enter__ = MagicMock(return_value=next(clients))
                 ctx.__exit__ = MagicMock(return_value=False)
                 return ctx
+
             MockClient.side_effect = make_ctx
             mod._device_login(auth_config, "test", profile, no_browser=True)
 
 
 # ── _token_exchange connect error (lines 790-791) ───────────────────────────
+
 
 class TestTokenExchangeConnectError:
     def test_connect_error(self, cli_module):
@@ -915,12 +995,11 @@ class TestTokenExchangeConnectError:
             MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             with pytest.raises((SystemExit, ClickExit)):
-                cli_module._token_exchange(
-                    {"access_token": "tok"}, auth_config, "https://api.example.com"
-                )
+                cli_module._token_exchange({"access_token": "tok"}, auth_config, "https://api.example.com")
 
 
 # ── _device_discover_endpoints issuer + config error paths ───────────────────
+
 
 class TestDeviceDiscoverErrors:
     def test_issuer_url_http_error(self, cli_module):
@@ -940,15 +1019,14 @@ class TestDeviceDiscoverErrors:
         mock_resp.json.side_effect = KeyError("missing key")
 
         with patch("httpx.Client") as MockClient:
-            MockClient.return_value.__enter__ = MagicMock(
-                return_value=MagicMock(get=MagicMock(return_value=mock_resp))
-            )
+            MockClient.return_value.__enter__ = MagicMock(return_value=MagicMock(get=MagicMock(return_value=mock_resp)))
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             with pytest.raises((SystemExit, ClickExit)):
                 cli_module._device_discover_endpoints(auth_config)
 
 
 # ── load_profiles edge case (line 126) ───────────────────────────────────────
+
 
 class TestLoadProfilesEdge:
     def test_non_dict_toml(self, tmp_config):
@@ -963,6 +1041,7 @@ class TestLoadProfilesEdge:
 
 
 # ── fetch_spec auth error passthrough (lines 220-221) ────────────────────────
+
 
 class TestFetchSpecAuthError:
     def test_auth_error_suppressed(self, tmp_config):
@@ -1002,6 +1081,7 @@ class TestFetchSpecAuthError:
             "verify_ssl": True,
         }
         import hashlib
+
         url = "https://api.example.com/openapi.json"
         url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
         cache_file = cache_dir / f"spec_{url_hash}.json"
@@ -1017,6 +1097,7 @@ class TestFetchSpecAuthError:
 
 
 # ── profile commands edge cases ──────────────────────────────────────────────
+
 
 class TestProfileCommandEdges:
     def test_profile_add_prompts_url(self, tmp_config):

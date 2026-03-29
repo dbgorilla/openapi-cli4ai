@@ -23,6 +23,7 @@ runner = CliRunner()
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _write_config(config_file: Path, data: dict) -> None:
     """Write a TOML config to the given path."""
     config_file.write_text(tomli_w.dumps(data))
@@ -86,6 +87,7 @@ def _mock_response(
 # ===========================================================================
 # 1. cmd_endpoints
 # ===========================================================================
+
 
 class TestCmdEndpoints:
     """Tests for the 'endpoints' command."""
@@ -211,6 +213,7 @@ class TestCmdEndpoints:
 # 2. cmd_call
 # ===========================================================================
 
+
 class TestCmdCall:
     """Tests for the 'call' command."""
 
@@ -282,10 +285,16 @@ class TestCmdCall:
         mock_client.request.return_value = mock_resp
 
         with patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client):
-            result = runner.invoke(app, [
-                "call", "GET", "/pet/findByStatus",
-                "--query", "status=available",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "call",
+                    "GET",
+                    "/pet/findByStatus",
+                    "--query",
+                    "status=available",
+                ],
+            )
 
         assert result.exit_code == 0
         call_kwargs = mock_client.request.call_args
@@ -302,10 +311,16 @@ class TestCmdCall:
         mock_client.request.return_value = mock_resp
 
         with patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client):
-            result = runner.invoke(app, [
-                "call", "GET", "/data",
-                "--header", "X-Custom: my-value",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "call",
+                    "GET",
+                    "/data",
+                    "--header",
+                    "X-Custom: my-value",
+                ],
+            )
 
         assert result.exit_code == 0
         call_kwargs = mock_client.request.call_args
@@ -387,6 +402,7 @@ class TestCmdCall:
 # 3. cmd_run
 # ===========================================================================
 
+
 class TestCmdRun:
     """Tests for the 'run' command."""
 
@@ -404,10 +420,15 @@ class TestCmdRun:
             patch.object(mod, "fetch_spec", return_value=petstore_spec),
             patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client),
         ):
-            result = runner.invoke(app, [
-                "run", "findPetsByStatus",
-                "--input", '{"status": "available"}',
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "findPetsByStatus",
+                    "--input",
+                    '{"status": "available"}',
+                ],
+            )
 
         assert result.exit_code == 0
         mock_client.request.assert_called_once()
@@ -426,10 +447,15 @@ class TestCmdRun:
             patch.object(mod, "fetch_spec", return_value=petstore_spec),
             patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client),
         ):
-            result = runner.invoke(app, [
-                "run", "getPetById",
-                "--input", '{"petId": 1}',
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "getPetById",
+                    "--input",
+                    '{"petId": 1}',
+                ],
+            )
 
         assert result.exit_code == 0
         call_args = mock_client.request.call_args
@@ -453,10 +479,15 @@ class TestCmdRun:
             patch.object(mod, "fetch_spec", return_value=petstore_spec),
             patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client),
         ):
-            result = runner.invoke(app, [
-                "run", "findPetsByStatus",
-                "--input-file", str(input_file),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "findPetsByStatus",
+                    "--input-file",
+                    str(input_file),
+                ],
+            )
 
         assert result.exit_code == 0
 
@@ -487,10 +518,15 @@ class TestCmdRun:
             patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client),
         ):
             # Use wrong case — should still match via case-insensitive lookup
-            result = runner.invoke(app, [
-                "run", "FINDPETSBYSTATUS",
-                "--input", '{"status": "available"}',
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "FINDPETSBYSTATUS",
+                    "--input",
+                    '{"status": "available"}',
+                ],
+            )
 
         assert result.exit_code == 0
 
@@ -523,10 +559,15 @@ class TestCmdRun:
         _write_config(mod.CONFIG_FILE, _base_config())
 
         with patch.object(mod, "fetch_spec", return_value=petstore_spec):
-            result = runner.invoke(app, [
-                "run", "findPetsByStatus",
-                "--input-file", "/nonexistent/file.json",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "findPetsByStatus",
+                    "--input-file",
+                    "/nonexistent/file.json",
+                ],
+            )
 
         assert result.exit_code != 0
         assert "Input file not found" in result.output
@@ -536,10 +577,15 @@ class TestCmdRun:
         _write_config(mod.CONFIG_FILE, _base_config())
 
         with patch.object(mod, "fetch_spec", return_value=petstore_spec):
-            result = runner.invoke(app, [
-                "run", "findPetsByStatus",
-                "--input", "{bad json",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "findPetsByStatus",
+                    "--input",
+                    "{bad json",
+                ],
+            )
 
         assert result.exit_code != 0
         assert "Invalid JSON input" in result.output
@@ -559,10 +605,15 @@ class TestCmdRun:
             patch.object(mod, "fetch_spec", return_value=petstore_spec),
             patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client),
         ):
-            result = runner.invoke(app, [
-                "run", "addPet",
-                "--input", '{"name": "Rex", "photoUrls": [], "status": "available"}',
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "addPet",
+                    "--input",
+                    '{"name": "Rex", "photoUrls": [], "status": "available"}',
+                ],
+            )
 
         assert result.exit_code == 0
         call_kwargs = mock_client.request.call_args
@@ -573,6 +624,7 @@ class TestCmdRun:
 # ===========================================================================
 # 4. cmd_login
 # ===========================================================================
+
 
 class TestCmdLogin:
     """Tests for the 'login' command."""
@@ -597,11 +649,16 @@ class TestCmdLogin:
             patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client),
             patch.object(mod, "_try_post_login_spec_fetch"),
         ):
-            result = runner.invoke(app, [
-                "login",
-                "--username", "testuser",
-                "--password", "testpass",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "login",
+                    "--username",
+                    "testuser",
+                    "--password",
+                    "testpass",
+                ],
+            )
 
         assert result.exit_code == 0
         assert "Logged in successfully" in result.output
@@ -626,10 +683,14 @@ class TestCmdLogin:
         mod, tmp_path, cache_dir = tmp_config
         _write_config(mod.CONFIG_FILE, _base_config())
 
-        result = runner.invoke(app, [
-            "login",
-            "--access-token", "my-injected-token-value",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "login",
+                "--access-token",
+                "my-injected-token-value",
+            ],
+        )
 
         assert result.exit_code == 0
         assert "Token injected successfully" in result.output
@@ -644,11 +705,16 @@ class TestCmdLogin:
         mod, tmp_path, cache_dir = tmp_config
         _write_config(mod.CONFIG_FILE, _base_config())
 
-        result = runner.invoke(app, [
-            "login",
-            "--access-token", "access-abc",
-            "--refresh-token", "refresh-xyz",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "login",
+                "--access-token",
+                "access-abc",
+                "--refresh-token",
+                "refresh-xyz",
+            ],
+        )
 
         assert result.exit_code == 0
         token_cache = cache_dir / "test_token.json"
@@ -660,10 +726,14 @@ class TestCmdLogin:
         mod, tmp_path, cache_dir = tmp_config
         _write_config(mod.CONFIG_FILE, _base_config())
 
-        result = runner.invoke(app, [
-            "login",
-            "--access-token-stdin",
-        ], input="stdin-token-value\n")
+        result = runner.invoke(
+            app,
+            [
+                "login",
+                "--access-token-stdin",
+            ],
+            input="stdin-token-value\n",
+        )
 
         assert result.exit_code == 0
         assert "Token injected successfully" in result.output
@@ -687,11 +757,16 @@ class TestCmdLogin:
         mock_client.post.return_value = error_resp
 
         with patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client):
-            result = runner.invoke(app, [
-                "login",
-                "--username", "bad",
-                "--password", "bad",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "login",
+                    "--username",
+                    "bad",
+                    "--password",
+                    "bad",
+                ],
+            )
 
         assert result.exit_code != 0
 
@@ -714,11 +789,16 @@ class TestCmdLogin:
             patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client),
             patch.object(mod, "_try_post_login_spec_fetch"),
         ):
-            result = runner.invoke(app, [
-                "login",
-                "--username", "user",
-                "--password-file", str(pw_file),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "login",
+                    "--username",
+                    "user",
+                    "--password-file",
+                    str(pw_file),
+                ],
+            )
 
         assert result.exit_code == 0
         # Verify the password from file was used in the payload
@@ -730,6 +810,7 @@ class TestCmdLogin:
 # ===========================================================================
 # 5. cmd_logout
 # ===========================================================================
+
 
 class TestCmdLogout:
     """Tests for the 'logout' command."""
@@ -760,6 +841,7 @@ class TestCmdLogout:
 # 6. cmd_init (partial — non-interactive paths)
 # ===========================================================================
 
+
 class TestCmdInit:
     """Tests for the 'init' command (non-interactive paths only)."""
 
@@ -783,17 +865,24 @@ class TestCmdInit:
             patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_detect_client),
             patch.object(mod, "fetch_spec", return_value=petstore_spec),
         ):
-            result = runner.invoke(app, [
-                "init", "petstore",
-                "--url", "https://petstore3.swagger.io/api/v3",
-                "--auth", "none",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "petstore",
+                    "--url",
+                    "https://petstore3.swagger.io/api/v3",
+                    "--auth",
+                    "none",
+                ],
+            )
 
         assert result.exit_code == 0
         assert "Profile 'petstore' created" in result.output
 
         # Verify config was written
         import tomllib
+
         saved = tomllib.loads(mod.CONFIG_FILE.read_text())
         assert "petstore" in saved["profiles"]
         assert saved["active_profile"] == "petstore"
@@ -803,17 +892,25 @@ class TestCmdInit:
         _write_config(mod.CONFIG_FILE, {"profiles": {}})
 
         with patch.object(mod, "fetch_spec", return_value=petstore_spec):
-            result = runner.invoke(app, [
-                "init", "myapi",
-                "--url", "https://api.example.com",
-                "--spec-url", "https://api.example.com/docs/openapi.json",
-                "--auth", "none",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "myapi",
+                    "--url",
+                    "https://api.example.com",
+                    "--spec-url",
+                    "https://api.example.com/docs/openapi.json",
+                    "--auth",
+                    "none",
+                ],
+            )
 
         assert result.exit_code == 0
         assert "Profile 'myapi' created" in result.output
 
         import tomllib
+
         saved = tomllib.loads(mod.CONFIG_FILE.read_text())
         assert saved["profiles"]["myapi"]["openapi_url"] == "https://api.example.com/docs/openapi.json"
 
@@ -822,15 +919,23 @@ class TestCmdInit:
         _write_config(mod.CONFIG_FILE, {"profiles": {}})
 
         with patch.object(mod, "fetch_spec", return_value=petstore_spec):
-            result = runner.invoke(app, [
-                "init", "myapi",
-                "--url", "https://api.example.com",
-                "--spec", "/v2/api-docs",
-                "--auth", "none",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "myapi",
+                    "--url",
+                    "https://api.example.com",
+                    "--spec",
+                    "/v2/api-docs",
+                    "--auth",
+                    "none",
+                ],
+            )
 
         assert result.exit_code == 0
         import tomllib
+
         saved = tomllib.loads(mod.CONFIG_FILE.read_text())
         assert saved["profiles"]["myapi"]["openapi_path"] == "/v2/api-docs"
 
@@ -840,17 +945,25 @@ class TestCmdInit:
         _write_config(mod.CONFIG_FILE, {"profiles": {}})
 
         with patch.object(mod, "fetch_spec", side_effect=Exception("Connection refused")):
-            result = runner.invoke(app, [
-                "init", "broken",
-                "--url", "https://api.broken.com",
-                "--spec", "/openapi.json",
-                "--auth", "none",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "init",
+                    "broken",
+                    "--url",
+                    "https://api.broken.com",
+                    "--spec",
+                    "/openapi.json",
+                    "--auth",
+                    "none",
+                ],
+            )
 
         assert result.exit_code == 0
         assert "Warning" in result.output or "Profile 'broken' created" in result.output
 
         import tomllib
+
         saved = tomllib.loads(mod.CONFIG_FILE.read_text())
         assert "broken" in saved["profiles"]
 
@@ -859,6 +972,7 @@ class TestCmdInit:
 # 7. Profile commands
 # ===========================================================================
 
+
 class TestProfileCommands:
     """Tests for profile subcommands (add, list, use, remove, show)."""
 
@@ -866,17 +980,26 @@ class TestProfileCommands:
         mod, tmp_path, cache_dir = tmp_config
         _write_config(mod.CONFIG_FILE, {"profiles": {}})
 
-        result = runner.invoke(app, [
-            "profile", "add", "newprof",
-            "--url", "https://api.new.com",
-            "--spec", "/api/openapi.json",
-            "--auth", "none",
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "profile",
+                "add",
+                "newprof",
+                "--url",
+                "https://api.new.com",
+                "--spec",
+                "/api/openapi.json",
+                "--auth",
+                "none",
+            ],
+        )
 
         assert result.exit_code == 0
         assert "added" in result.output
 
         import tomllib
+
         saved = tomllib.loads(mod.CONFIG_FILE.read_text())
         assert "newprof" in saved["profiles"]
         assert saved["profiles"]["newprof"]["base_url"] == "https://api.new.com"
@@ -940,6 +1063,7 @@ class TestProfileCommands:
         assert "two" in result.output
 
         import tomllib
+
         saved = tomllib.loads(mod.CONFIG_FILE.read_text())
         assert saved["active_profile"] == "two"
 
@@ -975,6 +1099,7 @@ class TestProfileCommands:
         assert "removed" in result.output
 
         import tomllib
+
         saved = tomllib.loads(mod.CONFIG_FILE.read_text())
         assert "victim" not in saved["profiles"]
         # Active profile should switch to remaining one
@@ -1060,6 +1185,7 @@ class TestProfileCommands:
 # 8. main callback
 # ===========================================================================
 
+
 class TestMainCallback:
     """Tests for the main app callback (--version, --insecure, no subcommand)."""
 
@@ -1106,6 +1232,7 @@ class TestMainCallback:
 # ===========================================================================
 # Edge cases / extra coverage
 # ===========================================================================
+
 
 class TestEdgeCases:
     """Additional edge-case tests for better coverage."""
@@ -1188,10 +1315,15 @@ class TestEdgeCases:
         bad_file.write_text("{not valid")
 
         with patch.object(mod, "fetch_spec", return_value=petstore_spec):
-            result = runner.invoke(app, [
-                "run", "findPetsByStatus",
-                "--input-file", str(bad_file),
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "run",
+                    "findPetsByStatus",
+                    "--input-file",
+                    str(bad_file),
+                ],
+            )
 
         assert result.exit_code != 0
         assert "Invalid JSON" in result.output
@@ -1206,16 +1338,18 @@ class TestEdgeCases:
         # Build a fake JWT with exp claim
         header = base64.urlsafe_b64encode(b'{"alg":"HS256"}').rstrip(b"=").decode()
         exp_time = int(time.time()) + 7200
-        payload = base64.urlsafe_b64encode(
-            json.dumps({"sub": "user", "exp": exp_time}).encode()
-        ).rstrip(b"=").decode()
+        payload = base64.urlsafe_b64encode(json.dumps({"sub": "user", "exp": exp_time}).encode()).rstrip(b"=").decode()
         sig = base64.urlsafe_b64encode(b"fakesig").rstrip(b"=").decode()
         jwt_token = f"{header}.{payload}.{sig}"
 
-        result = runner.invoke(app, [
-            "login",
-            "--access-token", jwt_token,
-        ])
+        result = runner.invoke(
+            app,
+            [
+                "login",
+                "--access-token",
+                jwt_token,
+            ],
+        )
 
         assert result.exit_code == 0
         token_cache = cache_dir / "test_token.json"
@@ -1233,11 +1367,18 @@ class TestEdgeCases:
         mock_client.request.return_value = mock_resp
 
         with patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client):
-            result = runner.invoke(app, [
-                "call", "GET", "/search",
-                "--query", "q=test",
-                "--query", "limit=10",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "call",
+                    "GET",
+                    "/search",
+                    "--query",
+                    "q=test",
+                    "--query",
+                    "limit=10",
+                ],
+            )
 
         assert result.exit_code == 0
         call_kwargs = mock_client.request.call_args
@@ -1254,11 +1395,18 @@ class TestEdgeCases:
         mock_client.request.return_value = mock_resp
 
         with patch("openapi_cli4ai.cli.httpx.Client", return_value=mock_client):
-            result = runner.invoke(app, [
-                "call", "GET", "/data",
-                "--header", "X-First: one",
-                "--header", "X-Second: two",
-            ])
+            result = runner.invoke(
+                app,
+                [
+                    "call",
+                    "GET",
+                    "/data",
+                    "--header",
+                    "X-First: one",
+                    "--header",
+                    "X-Second: two",
+                ],
+            )
 
         assert result.exit_code == 0
         call_kwargs = mock_client.request.call_args

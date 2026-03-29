@@ -189,8 +189,11 @@ def test_device_login_slow_down(cli_module, tmp_config):
 
     sleep_calls = []
 
-    with patch("httpx.Client") as MockClient, patch("webbrowser.open"), \
-         patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)):
+    with (
+        patch("httpx.Client") as MockClient,
+        patch("webbrowser.open"),
+        patch("time.sleep", side_effect=lambda s: sleep_calls.append(s)),
+    ):
         MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
         MockClient.return_value.__exit__ = MagicMock(return_value=False)
         mod._device_login(auth_config, "testprofile", profile, no_browser=True)
@@ -544,6 +547,7 @@ def test_device_login_with_token_exchange(cli_module, tmp_config):
     clients = iter([device_code_client, poll_client, exchange_client])
 
     with patch("httpx.Client") as MockClient, patch("webbrowser.open"), patch("time.sleep"):
+
         def make_context(*args, **kwargs):
             ctx = MagicMock()
             c = next(clients)

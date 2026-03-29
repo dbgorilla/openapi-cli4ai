@@ -769,9 +769,9 @@ def _token_exchange(
         "token_exchange_body",
         '{"access_token": "{access_token}"}',
     )
-    body_str = body_template.replace(
-        "{access_token}", token_data.get("access_token", "")
-    ).replace("{refresh_token}", token_data.get("refresh_token", ""))
+    body_str = body_template.replace("{access_token}", token_data.get("access_token", "")).replace(
+        "{refresh_token}", token_data.get("refresh_token", "")
+    )
 
     exchange_url = f"{base_url.rstrip('/')}{exchange_endpoint}"
     try:
@@ -828,9 +828,7 @@ def _device_discover_endpoints(auth_config: dict, verify: bool = True) -> dict:
                 device_ep = oidc_config.get("device_authorization_endpoint")
                 token_ep = oidc_config.get("token_endpoint")
                 if not device_ep:
-                    console.print(
-                        f"[red]Issuer {issuer_url} does not advertise device_authorization_endpoint.[/red]"
-                    )
+                    console.print(f"[red]Issuer {issuer_url} does not advertise device_authorization_endpoint.[/red]")
                     raise typer.Exit(1)
                 return {
                     "device_authorization_endpoint": device_ep,
@@ -1779,9 +1777,7 @@ def _init_device_auth(
         else:
             use_issuer = typer.confirm("Use issuer URL for OIDC discovery?", default=True)
             if use_issuer:
-                profile["auth"]["issuer_url"] = typer.prompt(
-                    "Issuer URL (e.g., https://accounts.google.com)"
-                )
+                profile["auth"]["issuer_url"] = typer.prompt("Issuer URL (e.g., https://accounts.google.com)")
             else:
                 if not client_id:
                     client_id = typer.prompt("OAuth Client ID")
