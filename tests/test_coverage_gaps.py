@@ -468,8 +468,8 @@ class TestCmdLoginFlows:
             patch.object(mod, "_try_post_login_spec_fetch"),
             patch(
                 "sys.stdin",
-                new_callable=lambda: lambda: MagicMock(
-                    isatty=MagicMock(return_value=False), read=MagicMock(return_value="mypassword\n")
+                new_callable=lambda: (
+                    lambda: MagicMock(isatty=MagicMock(return_value=False), read=MagicMock(return_value="mypassword\n"))
                 ),
             ),
         ):
