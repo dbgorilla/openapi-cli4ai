@@ -194,7 +194,8 @@ def _request_with_retry(
         else:
             wait = 2**attempt
 
-        # Add jitter (0-25% of wait time), cap per-attempt at 300s
+        # Floor at 0 (servers may send negative Retry-After), add jitter, cap at 300s
+        wait = max(0.0, wait)
         wait = min(wait + random.uniform(0, wait * 0.25), 300.0)
 
         # Enforce aggregate cap
@@ -2437,7 +2438,7 @@ def _try_post_login_spec_fetch(profile: dict) -> None:
 def cmd_logout() -> None:
     """Clear cached authentication tokens for the active profile."""
     profile_name, profile = get_active_profile()
-    token_cache = CACHE_DIR / f"{profile_name}_token.json"
+    token_cache = CACHE_DIR / f"{_safe_profile_name(profile_name)}_token.json"
     if token_cache.exists():
         token_cache.unlink()
         console.print(f"[green]Logged out from '{profile_name}'.[/green]")

@@ -254,14 +254,14 @@ class TestJSONInjection:
                 ],
             )
 
-            # Verify the payload sent to the server
-            if mock_client.post.called:
-                call_kwargs = mock_client.post.call_args
-                sent_payload = call_kwargs.kwargs.get("json") or (
-                    call_kwargs.args[1] if len(call_kwargs.args) > 1 else None
-                )
-                if sent_payload:
-                    assert "admin" not in sent_payload, "JSON injection should be prevented"
+            # Verify the payload sent to the server (unconditional — test must exercise the post)
+            assert mock_client.post.called, "Login command must make an HTTP POST"
+            call_kwargs = mock_client.post.call_args
+            sent_payload = call_kwargs.kwargs.get("json") or (
+                call_kwargs.args[1] if len(call_kwargs.args) > 1 else None
+            )
+            assert sent_payload is not None, "POST must include a payload"
+            assert "admin" not in sent_payload, "JSON injection should be prevented"
 
 
 # ── XSS in OIDC Error Response Tests ─────────────────────────────────────────
