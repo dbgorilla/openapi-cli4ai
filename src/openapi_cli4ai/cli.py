@@ -694,11 +694,7 @@ def _bearer_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
     # Static token from env var
     env_var = auth_config.get("token_env_var")
     if env_var:
-        token = os.environ.get(env_var)
-        if not token:
-            if not quiet:
-                console.print(f"[red]Set the {env_var} environment variable with your token.[/red]")
-            raise typer.Exit(1)
+        token = _require_env_var(env_var, "token", quiet=quiet)
         prefix = auth_config.get("prefix", "Bearer ")
         header = auth_config.get("header", "Authorization")
         return {header: f"{prefix}{token}"}
@@ -716,7 +712,7 @@ def _bearer_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
 def _oauth_bearer(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
     """Handle OAuth password-grant or similar token endpoint flows."""
     profile_name = profile.get("_name", "default")
-    token_cache = CACHE_DIR / f"{profile_name}_token.json"
+    token_cache = CACHE_DIR / f"{_safe_profile_name(profile_name)}_token.json"
 
     # Check cached token
     if token_cache.exists():
@@ -750,7 +746,7 @@ def _try_refresh_token(profile: dict, auth_config: dict, cached: dict) -> dict |
     try:
         base_url = profile["base_url"].rstrip("/")
         verify = profile.get("verify_ssl", True) and get_verify_ssl()
-        with httpx.Client(verify=verify, timeout=30.0) as client:
+        with _make_client(verify=verify) as client:
             resp = client.post(
                 f"{base_url}{refresh_endpoint}",
                 headers={"Authorization": f"Bearer {cached['refresh_token']}"},
@@ -761,13 +757,12 @@ def _try_refresh_token(profile: dict, auth_config: dict, cached: dict) -> dict |
                     new_data["expires_at"] = time.time() + new_data["expires_in"]
                 elif "expires_at" not in new_data:
                     new_data["expires_at"] = time.time() + 86400  # 24h default
-                profile_name = profile.get("_name", "default")
-                token_cache = CACHE_DIR / f"{profile_name}_token.json"
-                ensure_dirs()
-                token_cache.write_text(json.dumps(new_data))
-                token_cache.chmod(0o600)
+                # Preserve existing refresh_token if server omits a new one
+                if "refresh_token" not in new_data and "refresh_token" in cached:
+                    new_data["refresh_token"] = cached["refresh_token"]
+                _save_token(profile.get("_name", "default"), new_data)
                 return new_data
-    except Exception:
+    except (httpx.HTTPError, json.JSONDecodeError, OSError, KeyError):
         pass
     return None
 
@@ -778,7 +773,7 @@ def _try_refresh_token(profile: dict, auth_config: dict, cached: dict) -> dict |
 def _oidc_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
     """Handle OIDC auth -- cached token with form-encoded refresh."""
     profile_name = profile.get("_name", "default")
-    token_cache = CACHE_DIR / f"{profile_name}_token.json"
+    token_cache = CACHE_DIR / f"{_safe_profile_name(profile_name)}_token.json"
 
     if token_cache.exists():
         try:
@@ -795,9 +790,10 @@ def _oidc_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
                 refreshed = _oidc_refresh(auth_config, cached, verify=verify)
                 if refreshed:
                     refreshed["expires_at"] = time.time() + refreshed.get("expires_in", 300)
-                    ensure_dirs()
-                    token_cache.write_text(json.dumps(refreshed))
-                    token_cache.chmod(0o600)
+                    # Preserve existing refresh_token if server omits a new one
+                    if "refresh_token" not in refreshed and "refresh_token" in cached:
+                        refreshed["refresh_token"] = cached["refresh_token"]
+                    _save_token(profile_name, refreshed)
                     return {"Authorization": f"Bearer {refreshed['access_token']}"}
         except (json.JSONDecodeError, OSError, KeyError):
             pass
@@ -814,7 +810,7 @@ def _oidc_refresh(auth_config: dict, cached: dict, verify: bool = True) -> dict 
     if not token_url or not client_id:
         return None
     try:
-        with httpx.Client(verify=verify, timeout=30.0) as client:
+        with _make_client(verify=verify) as client:
             resp = client.post(
                 token_url,
                 data={
@@ -825,7 +821,7 @@ def _oidc_refresh(auth_config: dict, cached: dict, verify: bool = True) -> dict 
             )
             if resp.status_code == 200:
                 return resp.json()
-    except Exception:
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError):
         pass
     return None
 
@@ -867,9 +863,8 @@ class _OIDCCallbackHandler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
-            self.wfile.write(
-                f"<html><body><h2>Login failed</h2><p>{_OIDCCallbackHandler.error}</p></body></html>".encode()
-            )
+            safe_error = html_module.escape(str(_OIDCCallbackHandler.error))
+            self.wfile.write(f"<html><body><h2>Login failed</h2><p>{safe_error}</p></body></html>".encode())
 
     def log_message(self, format: str, *args: object) -> None:
         pass  # Suppress HTTP server logging
@@ -892,6 +887,7 @@ def _oidc_login(
     client_id = auth_config.get("client_id", "")
     scopes = auth_config.get("scopes", "openid")
     callback_port = auth_config.get("callback_port", 8484)
+    callback_timeout = auth_config.get("callback_timeout", 120)
     redirect_uri = auth_config.get("redirect_uri", f"http://localhost:{callback_port}/callback")
 
     if not authorize_url or not token_url or not client_id:
@@ -918,9 +914,9 @@ def _oidc_login(
     full_auth_url = f"{authorize_url}?{auth_params}"
 
     if no_browser:
-        auth_code = _oidc_login_no_browser(full_auth_url)
+        auth_code = _oidc_login_no_browser(full_auth_url, expected_state=state)
     else:
-        auth_code = _oidc_login_browser(full_auth_url, callback_port, state)
+        auth_code = _oidc_login_browser(full_auth_url, callback_port, state, timeout=callback_timeout)
 
     # Exchange code for tokens
     _oidc_exchange_code(
@@ -936,21 +932,32 @@ def _oidc_login(
     )
 
 
-def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str) -> str:
+def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str, timeout: int = 120) -> str:
     """Open browser and listen for the OIDC callback on localhost."""
     _OIDCCallbackHandler.auth_code = None
     _OIDCCallbackHandler.error = None
     _OIDCCallbackHandler.expected_state = state
-    server = HTTPServer(("127.0.0.1", callback_port), _OIDCCallbackHandler)
-    server.timeout = 120
 
-    console.print(f"[dim]Listening on http://localhost:{callback_port}/callback[/dim]")
+    try:
+        server = HTTPServer(("127.0.0.1", callback_port), _OIDCCallbackHandler)
+    except OSError as e:
+        console.print(f"[red]Cannot start OIDC callback server on port {callback_port}: {e}[/red]")
+        console.print(
+            "[dim]Another process may be using this port. Try a different callback_port in your profile.[/dim]"
+        )
+        raise typer.Exit(1)
+
+    server.timeout = timeout
+
+    err_console.print(f"[dim]Listening on http://localhost:{callback_port}/callback[/dim]")
     console.print("[bold]Opening browser for login...[/bold]")
     webbrowser.open(full_auth_url)
-    console.print("[dim]Waiting for callback (120s timeout)...[/dim]")
+    console.print(f"[dim]Waiting for callback ({timeout}s timeout)...[/dim]")
 
-    server.handle_request()
-    server.server_close()
+    try:
+        server.handle_request()
+    finally:
+        server.server_close()
 
     if _OIDCCallbackHandler.error:
         console.print(f"[red]OIDC error: {_OIDCCallbackHandler.error}[/red]")
@@ -962,7 +969,7 @@ def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str) -> s
     return _OIDCCallbackHandler.auth_code
 
 
-def _oidc_login_no_browser(full_auth_url: str) -> str:
+def _oidc_login_no_browser(full_auth_url: str, expected_state: str | None = None) -> str:
     """Print the auth URL, user pastes back the redirect URL containing the code."""
     console.print("\n[bold]Open this URL in any browser to log in:[/bold]\n")
     console.print(f"  {full_auth_url}\n")
@@ -979,6 +986,14 @@ def _oidc_login_no_browser(full_auth_url: str) -> str:
     if "error" in params:
         console.print(f"[red]OIDC error: {params['error'][0]}[/red]")
         raise typer.Exit(1)
+
+    # Validate state to prevent CSRF
+    if expected_state:
+        received_state = params.get("state", [None])[0]
+        if received_state != expected_state:
+            console.print("[red]OIDC error: state mismatch — possible CSRF attack.[/red]")
+            console.print("[dim]The state parameter in the redirect URL does not match the expected value.[/dim]")
+            raise typer.Exit(1)
 
     if "code" not in params:
         console.print("[red]No authorization code found in the URL.[/red]")
@@ -1002,7 +1017,7 @@ def _oidc_exchange_code(
 ) -> None:
     """Exchange an authorization code for tokens and cache them."""
     try:
-        with httpx.Client(verify=verify, timeout=30.0) as client:
+        with _make_client(verify=verify) as client:
             resp = client.post(
                 token_url,
                 data={
@@ -1030,16 +1045,13 @@ def _oidc_exchange_code(
         elif "expires_at" not in token_data:
             token_data["expires_at"] = time.time() + 86400
 
-        token_cache = CACHE_DIR / f"{profile_name}_token.json"
-        ensure_dirs()
-        token_cache.write_text(json.dumps(token_data))
-        token_cache.chmod(0o600)
+        token_cache = _save_token(profile_name, token_data)
 
         console.print("[green]Logged in successfully![/green]")
-        console.print(f"[dim]Token cached at {token_cache}[/dim]")
+        err_console.print(f"[dim]Token cached at {token_cache}[/dim]")
 
-    except httpx.ConnectError:
-        console.print(f"[red]Cannot connect to {token_url}[/red]")
+    except httpx.HTTPError as e:
+        console.print(f"[red]Token exchange failed: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -1071,19 +1083,19 @@ def _token_exchange(
 
     exchange_url = f"{base_url.rstrip('/')}{exchange_endpoint}"
     try:
-        with httpx.Client(verify=verify, timeout=30.0) as client:
+        with _make_client(verify=verify) as client:
             resp = client.post(
                 exchange_url,
                 content=body_str,
                 headers={"Content-Type": "application/json"},
             )
         if resp.status_code != 200:
-            console.print(f"[red]Token exchange failed ({resp.status_code}):[/red]")
-            console.print(resp.text)
+            err_console.print(f"[red]Token exchange failed ({resp.status_code}):[/red]")
+            err_console.print(resp.text)
             raise typer.Exit(1)
         return resp.json()
-    except httpx.ConnectError:
-        console.print(f"[red]Cannot connect to {exchange_url}[/red]")
+    except httpx.HTTPError as e:
+        err_console.print(f"[red]Token exchange failed: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -1101,7 +1113,7 @@ def _device_discover_endpoints(auth_config: dict, verify: bool = True) -> dict:
 
     if device_config_url:
         try:
-            with httpx.Client(verify=verify, timeout=15.0) as client:
+            with _make_client(verify=verify) as client:
                 resp = client.get(device_config_url)
             if resp.status_code == 200:
                 config = resp.json()
@@ -1111,20 +1123,22 @@ def _device_discover_endpoints(auth_config: dict, verify: bool = True) -> dict:
                     "client_id": config.get("client_id", auth_config.get("client_id", "")),
                 }
         except (httpx.HTTPError, KeyError, json.JSONDecodeError) as e:
-            console.print(f"[red]Failed to fetch device config from {device_config_url}: {e}[/red]")
+            err_console.print(f"[red]Failed to fetch device config from {device_config_url}: {e}[/red]")
             raise typer.Exit(1)
 
     if issuer_url:
         well_known_url = f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
         try:
-            with httpx.Client(verify=verify, timeout=15.0) as client:
+            with _make_client(verify=verify) as client:
                 resp = client.get(well_known_url)
             if resp.status_code == 200:
                 oidc_config = resp.json()
                 device_ep = oidc_config.get("device_authorization_endpoint")
                 token_ep = oidc_config.get("token_endpoint")
                 if not device_ep:
-                    console.print(f"[red]Issuer {issuer_url} does not advertise device_authorization_endpoint.[/red]")
+                    err_console.print(
+                        f"[red]Issuer {issuer_url} does not advertise device_authorization_endpoint.[/red]"
+                    )
                     raise typer.Exit(1)
                 return {
                     "device_authorization_endpoint": device_ep,
@@ -1132,7 +1146,7 @@ def _device_discover_endpoints(auth_config: dict, verify: bool = True) -> dict:
                     "client_id": auth_config.get("client_id", ""),
                 }
         except (httpx.HTTPError, json.JSONDecodeError) as e:
-            console.print(f"[red]Failed to fetch OIDC discovery from {well_known_url}: {e}[/red]")
+            err_console.print(f"[red]Failed to fetch OIDC discovery from {well_known_url}: {e}[/red]")
             raise typer.Exit(1)
 
     # Explicit endpoints
@@ -1140,7 +1154,7 @@ def _device_discover_endpoints(auth_config: dict, verify: bool = True) -> dict:
     token_ep = auth_config.get("token_endpoint")
     client_id = auth_config.get("client_id", "")
     if not device_ep or not token_ep:
-        console.print(
+        err_console.print(
             "[red]Device auth requires device_config_url, issuer_url, or explicit "
             "device_authorization_endpoint + token_endpoint.[/red]"
         )
@@ -1163,23 +1177,23 @@ def _device_login(
     scopes = auth_config.get("scopes", "openid")
 
     if not client_id:
-        console.print("[red]Device auth requires client_id.[/red]")
+        err_console.print("[red]Device auth requires client_id.[/red]")
         raise typer.Exit(1)
 
     # Step 1: Request device code
     try:
-        with httpx.Client(verify=verify, timeout=30.0) as client:
+        with _make_client(verify=verify) as client:
             resp = client.post(
                 device_ep,
                 data={"client_id": client_id, "scope": scopes},
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
         if resp.status_code != 200:
-            console.print(f"[red]Device authorization request failed ({resp.status_code}):[/red]")
-            console.print(resp.text)
+            err_console.print(f"[red]Device authorization request failed ({resp.status_code}):[/red]")
+            err_console.print(resp.text)
             raise typer.Exit(1)
-    except httpx.ConnectError:
-        console.print(f"[red]Cannot connect to {device_ep}[/red]")
+    except httpx.HTTPError as e:
+        err_console.print(f"[red]Device authorization failed: {e}[/red]")
         raise typer.Exit(1)
 
     device_data = resp.json()
@@ -1192,16 +1206,16 @@ def _device_login(
 
     # Step 2: Display instructions
     display_uri = verification_uri_complete or verification_uri
-    console.print(f"\n[bold]Open this URL in your browser:[/bold]\n  {display_uri}\n")
-    console.print(f"[bold]Code:[/bold] {user_code}")
-    console.print("[dim]Waiting for authorization...[/dim]\n")
+    err_console.print(f"\n[bold]Open this URL in your browser:[/bold]\n  {display_uri}\n")
+    err_console.print(f"[bold]Code:[/bold] {user_code}")
+    err_console.print("[dim]Waiting for authorization...[/dim]\n")
 
     if not no_browser:
         webbrowser.open(display_uri)
 
     # Step 3: Poll for token
     deadline = time.time() + expires_in
-    with httpx.Client(verify=verify, timeout=30.0) as client:
+    with _make_client(verify=verify) as client:
         while time.time() < deadline:
             time.sleep(interval)
             try:
@@ -1233,16 +1247,16 @@ def _device_login(
                     interval += 5
                     continue
                 elif error_code == "expired_token":
-                    console.print("[red]Device code expired. Please try again.[/red]")
+                    err_console.print("[red]Device code expired. Please try again.[/red]")
                     raise typer.Exit(1)
                 elif error_code == "access_denied":
-                    console.print("[red]Authorization was denied.[/red]")
+                    err_console.print("[red]Authorization was denied.[/red]")
                     raise typer.Exit(1)
                 else:
-                    console.print(f"[red]Device flow error: {error_code}[/red]")
+                    err_console.print(f"[red]Device flow error: {error_code}[/red]")
                     raise typer.Exit(1)
         else:
-            console.print("[red]Device code expired (timeout). Please try again.[/red]")
+            err_console.print("[red]Device code expired (timeout). Please try again.[/red]")
             raise typer.Exit(1)
 
     # Step 4: Token exchange (two-phase auth) if configured
@@ -1256,23 +1270,20 @@ def _device_login(
     elif "expires_at" not in token_data:
         token_data["expires_at"] = time.time() + 86400
 
-    token_cache = CACHE_DIR / f"{profile_name}_token.json"
-    ensure_dirs()
-    token_cache.write_text(json.dumps(token_data))
-    token_cache.chmod(0o600)
+    token_cache = _save_token(profile_name, token_data)
 
     console.print("[green]Logged in successfully![/green]")
-    console.print(f"[dim]Token cached at {token_cache}[/dim]")
+    err_console.print(f"[dim]Token cached at {token_cache}[/dim]")
 
 
 def _api_key_auth(auth_config: dict, quiet: bool = False) -> dict:
     """Handle API key auth via custom header."""
     env_var = auth_config.get("env_var", "")
-    key = os.environ.get(env_var, "") if env_var else ""
-    if not key:
+    if not env_var:
         if not quiet:
-            console.print(f"[red]Set the {env_var} environment variable with your API key.[/red]")
+            console.print("[red]API key auth requires 'env_var' in profile config.[/red]")
         raise typer.Exit(1)
+    key = _require_env_var(env_var, "API key", quiet=quiet)
     header = auth_config.get("header", "X-API-Key")
     prefix = auth_config.get("prefix", "")
     return {header: f"{prefix}{key}"}
@@ -1282,17 +1293,12 @@ def _basic_auth(auth_config: dict, quiet: bool = False) -> dict:
     """Handle HTTP basic auth."""
     user_var = auth_config.get("username_env_var", "")
     pass_var = auth_config.get("password_env_var", "")
-    username = os.environ.get(user_var, "") if user_var else ""
-    password = os.environ.get(pass_var, "") if pass_var else ""
-    if not username or not password:
+    if not user_var or not pass_var:
         if not quiet:
-            missing = []
-            if not username:
-                missing.append(user_var)
-            if not password:
-                missing.append(pass_var)
-            console.print(f"[red]Set environment variable(s): {', '.join(missing)}[/red]")
+            console.print("[red]Basic auth requires 'username_env_var' and 'password_env_var' in profile.[/red]")
         raise typer.Exit(1)
+    username = _require_env_var(user_var, "username", quiet=quiet)
+    password = _require_env_var(pass_var, "password", quiet=quiet)
     encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
     return {"Authorization": f"Basic {encoded}"}
 
@@ -1944,7 +1950,7 @@ def cmd_init(
                                     break
                             except (json.JSONDecodeError, yaml.YAMLError):
                                 continue
-                except Exception:
+                except (httpx.HTTPError, OSError, KeyError, ValueError):
                     continue
 
         if resolved_spec_path:
@@ -2016,7 +2022,7 @@ def cmd_init(
                 border_style="green",
             )
         )
-    except (typer.Exit, Exception) as e:
+    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, yaml.YAMLError, ValueError, OSError) as e:
         console.print(f"[yellow]Warning: Could not validate spec ({e}). Profile saved anyway.[/yellow]")
 
     # Save profile
@@ -2242,7 +2248,7 @@ def cmd_login(
     verify = profile.get("verify_ssl", True) and get_verify_ssl()
 
     try:
-        with httpx.Client(verify=verify, timeout=30.0) as client:
+        with _make_client(verify=verify) as client:
             resp = client.post(token_url, json=payload)
 
         if resp.status_code != 200:
@@ -2259,18 +2265,15 @@ def cmd_login(
             token_data["expires_at"] = time.time() + 86400  # 24h default
 
         # Cache token
-        token_cache = CACHE_DIR / f"{profile_name}_token.json"
-        ensure_dirs()
-        token_cache.write_text(json.dumps(token_data))
-        token_cache.chmod(0o600)
+        token_cache = _save_token(profile_name, token_data)
 
         console.print("[green]Logged in successfully![/green]")
-        console.print(f"[dim]Token cached at {token_cache}[/dim]")
+        err_console.print(f"[dim]Token cached at {token_cache}[/dim]")
 
         _try_post_login_spec_fetch(profile)
 
-    except httpx.ConnectError:
-        console.print(f"[red]Cannot connect to {base_url}[/red]")
+    except httpx.HTTPError as e:
+        console.print(f"[red]Login failed: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -2278,12 +2281,12 @@ def _inject_token(profile_name: str, access_token: str, refresh_token: str, from
     """Inject a pre-obtained token into the token cache."""
     if from_stdin:
         if sys.stdin.isatty():
-            console.print("[red]--access-token-stdin requires piped input.[/red]")
+            err_console.print("[red]--access-token-stdin requires piped input.[/red]")
             raise typer.Exit(1)
         access_token = sys.stdin.read().strip()
 
     if not access_token:
-        console.print("[red]No access token provided.[/red]")
+        err_console.print("[red]No access token provided.[/red]")
         raise typer.Exit(1)
 
     token_data: dict = {"access_token": access_token}
@@ -2304,13 +2307,10 @@ def _inject_token(profile_name: str, access_token: str, refresh_token: str, from
     if "expires_at" not in token_data:
         token_data["expires_at"] = time.time() + 3600
 
-    token_cache = CACHE_DIR / f"{profile_name}_token.json"
-    ensure_dirs()
-    token_cache.write_text(json.dumps(token_data))
-    token_cache.chmod(0o600)
+    token_cache = _save_token(profile_name, token_data)
 
     console.print("[green]Token injected successfully![/green]")
-    console.print(f"[dim]Token cached at {token_cache}[/dim]")
+    err_console.print(f"[dim]Token cached at {token_cache}[/dim]")
 
 
 def _auto_detect_flow(auth_config: dict, verify: bool = True) -> str:
@@ -2320,20 +2320,20 @@ def _auto_detect_flow(auth_config: dict, verify: bool = True) -> str:
     """
     issuer_url = auth_config.get("issuer_url")
     if not issuer_url:
-        console.print("[red]Auto auth type requires issuer_url.[/red]")
+        err_console.print("[red]Auto auth type requires issuer_url.[/red]")
         raise typer.Exit(1)
 
     well_known_url = f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
     try:
-        with httpx.Client(verify=verify, timeout=15.0) as client:
+        with _make_client(verify=verify) as client:
             resp = client.get(well_known_url)
         if resp.status_code != 200:
-            console.print(f"[red]Failed to fetch OIDC discovery ({resp.status_code})[/red]")
+            err_console.print(f"[red]Failed to fetch OIDC discovery ({resp.status_code})[/red]")
             raise typer.Exit(1)
 
         oidc_config = resp.json()
     except (httpx.HTTPError, json.JSONDecodeError) as e:
-        console.print(f"[red]Failed to fetch OIDC discovery: {e}[/red]")
+        err_console.print(f"[red]Failed to fetch OIDC discovery: {e}[/red]")
         raise typer.Exit(1)
 
     # Check if device flow is supported
@@ -2344,13 +2344,13 @@ def _auto_detect_flow(auth_config: dict, verify: bool = True) -> str:
         # Populate auth_config with discovered endpoints for device flow
         auth_config.setdefault("device_authorization_endpoint", device_ep)
         auth_config.setdefault("token_endpoint", oidc_config.get("token_endpoint", ""))
-        console.print("[dim]Auto-detected: using device authorization flow[/dim]")
+        err_console.print("[dim]Auto-detected: using device authorization flow[/dim]")
         return "device"
 
     # Fall back to PKCE
     auth_config.setdefault("authorize_url", oidc_config.get("authorization_endpoint", ""))
     auth_config.setdefault("token_url", oidc_config.get("token_endpoint", ""))
-    console.print("[dim]Auto-detected: using Authorization Code + PKCE flow[/dim]")
+    err_console.print("[dim]Auto-detected: using Authorization Code + PKCE flow[/dim]")
     return "oidc"
 
 
@@ -2361,7 +2361,7 @@ def _try_post_login_spec_fetch(profile: dict) -> None:
         endpoints = extract_endpoint_summaries(spec)
         spec_title = spec.get("info", {}).get("title", "Unknown")
         console.print(f"[green]Fetched spec: {spec_title} ({len(endpoints)} endpoints)[/green]")
-    except (typer.Exit, Exception):
+    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, KeyError, OSError):
         pass
 
 
