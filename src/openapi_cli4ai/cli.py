@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from email.utils import parsedate_to_datetime
 import hashlib
 import html as html_module  # noqa: F401 (used by F3: OIDC callback HTML escaping)
 import json
@@ -190,7 +191,12 @@ def _request_with_retry(
             try:
                 wait = min(float(retry_after), 300.0)
             except ValueError:
-                wait = 2**attempt
+                # Retry-After may be an HTTP-date (RFC 7231 §7.1.3)
+                try:
+                    retry_dt = parsedate_to_datetime(retry_after)
+                    wait = min((retry_dt.timestamp() - time.time()), 300.0)
+                except (ValueError, TypeError):
+                    wait = 2**attempt
         else:
             wait = 2**attempt
 
@@ -555,7 +561,8 @@ def resolve_refs(schema: Any, spec_root: dict, max_depth: int = 10) -> Any:
             resolved_schema = resolve_refs(resolved, spec_root, max_depth - 1)
             # Preserve sibling keys alongside $ref (e.g., description, nullable)
             # Local siblings override component values per OpenAPI 3.1 spec
-            siblings = {k: v for k, v in schema.items() if k != "$ref"}
+            # Resolve sibling values in case they contain nested $refs
+            siblings = {k: resolve_refs(v, spec_root, max_depth - 1) for k, v in schema.items() if k != "$ref"}
             if siblings and isinstance(resolved_schema, dict):
                 merged = dict(resolved_schema)
                 merged.update(siblings)
@@ -1706,9 +1713,9 @@ def cmd_call(
                         error_data = _safe_json_or_text(response)
                         if raw or output_json_flag:
                             if isinstance(error_data, (dict, list)):
-                                console.print_json(json.dumps(error_data))
+                                print(json.dumps(error_data, indent=2))
                             else:
-                                console.print(str(error_data))
+                                print(str(error_data))
                             err_console.print(f"[red]HTTP {response.status_code}[/red]")
                         else:
                             _display_error(error_data, response.status_code)
@@ -1909,9 +1916,9 @@ def cmd_run(
                         error_data = _safe_json_or_text(response)
                         if raw or output_json_flag:
                             if isinstance(error_data, (dict, list)):
-                                console.print_json(json.dumps(error_data))
+                                print(json.dumps(error_data, indent=2))
                             else:
-                                console.print(str(error_data))
+                                print(str(error_data))
                             err_console.print(f"[red]HTTP {response.status_code}[/red]")
                         else:
                             _display_error(error_data, response.status_code)
