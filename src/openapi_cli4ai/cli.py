@@ -1900,9 +1900,15 @@ def cmd_run(
     parameters = endpoint.get("parameters", [])
     has_request_body = endpoint.get("requestBody") is not None
 
-    # If json_body was already set (array input), skip parameter routing
+    # If json_body was already set (array input), skip parameter routing but warn
+    # if the operation expects path/query/header params that can't be supplied
     if json_body is not None:
         path_params, query_params, header_params = {}, {}, {}
+        required_params = [p["name"] for p in parameters if isinstance(p, dict) and p.get("in") == "path"]
+        if required_params:
+            err_console.print(
+                f"[yellow]Warning: Array body input cannot supply path parameters: {', '.join(required_params)}[/yellow]"
+            )
     else:
         path_params, query_params, header_params, json_body = _route_inputs(parsed_input, parameters, has_request_body)
 
