@@ -1333,7 +1333,6 @@ def make_request(
     json_body: dict | None = None,
     params: dict | None = None,
     extra_headers: dict | None = None,
-    stream: bool = False,
 ) -> httpx.Response:
     """Make an authenticated HTTP request."""
     base_url = profile["base_url"].rstrip("/")
@@ -1345,13 +1344,7 @@ def make_request(
 
     url = f"{base_url}{path}" if path.startswith("/") else f"{base_url}/{path}"
 
-    with httpx.Client(verify=verify, timeout=60.0, follow_redirects=True) as client:
-        if stream:
-            headers["Accept"] = "text/event-stream"
-            # For streaming, we need to return within the context manager
-            # so we handle this differently in the call command
-            raise NotImplementedError("Use stream_request() for streaming")
-
+    with _make_client(verify=verify) as client:
         return client.request(
             method=method.upper(),
             url=url,
@@ -1387,32 +1380,51 @@ def handle_response(response: httpx.Response, raw: bool = False, json_output: bo
     else:
         status_style = "bold red"
 
+    # Use stderr for status line when output needs to be machine-parseable
+    status_console = err_console if (raw or json_output) else console
+
     if raw:
         print(response.text)
+        status_console.print(
+            f"[{status_style}]{status}[/{status_style}] [{status_style}]{response.reason_phrase}[/{status_style}]",
+            style="dim",
+        )
         return
 
     content_type = response.headers.get("content-type", "")
     if "json" in content_type:
         try:
             data = response.json()
-            if status >= 400:
-                _display_error(data, status)
-            elif json_output:
+        except json.JSONDecodeError:
+            # Content-Type says JSON but body isn't valid JSON
+            if json_output:
+                print(json.dumps({"error": response.text}, indent=2))
+            else:
+                console.print(response.text)
+            data = None
+
+        if data is not None:
+            if json_output:
+                # Always output valid JSON to stdout, even for errors
                 print(json.dumps(data, indent=2, default=str))
+            elif status >= 400:
+                _display_error(data, status)
             else:
                 console.print(RichJSON(json.dumps(data, default=str)))
-        except json.JSONDecodeError:
-            console.print(response.text)
     else:
-        console.print(response.text)
+        if json_output:
+            # Wrap non-JSON text in a JSON envelope for machine consumers
+            print(json.dumps({"text": response.text}, indent=2))
+        else:
+            console.print(response.text)
 
-    console.print(
+    status_console.print(
         f"[{status_style}]{status}[/{status_style}] [{status_style}]{response.reason_phrase}[/{status_style}]",
         style="dim",
     )
 
 
-def _display_error(data, status: int) -> None:
+def _display_error(data: Any, status: int) -> None:
     """Display error response with helpful formatting."""
     if isinstance(data, dict):
         message = data.get("message") or data.get("error") or data.get("detail") or str(data)
@@ -1490,7 +1502,7 @@ def stream_sse(response: httpx.Response) -> str:
                     if tool_name:
                         console.print(f"[yellow][{status}] {tool_name}[/yellow]")
                     elif status not in ("running", "complete"):
-                        console.print(f"[dim]{status}[/dim]")
+                        err_console.print(f"[dim]{status}[/dim]")
 
             except json.JSONDecodeError:
                 continue
@@ -1549,7 +1561,7 @@ def cmd_endpoints(
         for ep in eps:
             color = METHOD_COLORS.get(ep["method"], "white")
             console.print(f"[{color}]{ep['method']:7s}[/{color}] {ep['path']}  [dim]{ep.get('summary', '')}[/dim]")
-        console.print(f"[dim]{len(eps)} endpoint(s)[/dim]")
+        err_console.print(f"[dim]{len(eps)} endpoint(s)[/dim]")
     else:
         # Table format
         table = Table(title=f"Endpoints ({profile_name}) — {len(eps)} found")
@@ -1568,7 +1580,7 @@ def cmd_endpoints(
                 tags,
             )
         console.print(table)
-        console.print(f"[dim]{len(eps)} endpoint(s)[/dim]")
+        err_console.print(f"[dim]{len(eps)} endpoint(s)[/dim]")
 
 
 # ── Commands: call ─────────────────────────────────────────────────────────────
@@ -1599,7 +1611,7 @@ def cmd_call(
     """
     method = method.upper()
     if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
-        console.print(f"[red]Invalid HTTP method: {method}[/red]")
+        err_console.print(f"[red]Invalid HTTP method: {method}[/red]")
         raise typer.Exit(1)
 
     profile_name, profile = get_active_profile()
@@ -1608,21 +1620,21 @@ def cmd_call(
     json_body = None
     if body:
         if body.startswith("@"):
-            file_path = Path(body[1:])
+            file_path = _resolve_file_path(body[1:], purpose="body")
             if not file_path.exists():
-                console.print(f"[red]Body file not found: {file_path}[/red]")
+                err_console.print(f"[red]Body file not found: {file_path}[/red]")
                 raise typer.Exit(1)
             try:
                 json_body = json.loads(file_path.read_text())
-                console.print(f"[dim]Body loaded from {file_path}[/dim]")
+                err_console.print(f"[dim]Body loaded from {file_path}[/dim]")
             except json.JSONDecodeError as e:
-                console.print(f"[red]Invalid JSON in {file_path}: {e}[/red]")
+                err_console.print(f"[red]Invalid JSON in {file_path}: {e}[/red]")
                 raise typer.Exit(1)
         else:
             try:
                 json_body = json.loads(body)
             except json.JSONDecodeError as e:
-                console.print(f"[red]Invalid JSON body: {e}[/red]")
+                err_console.print(f"[red]Invalid JSON body: {e}[/red]")
                 raise typer.Exit(1)
 
     # Parse query params (key=value format)
@@ -1633,7 +1645,7 @@ def cmd_call(
                 k, v = q.split("=", 1)
                 params[k] = v
             else:
-                console.print(f"[red]Invalid query param (expected key=value): {q}[/red]")
+                err_console.print(f"[red]Invalid query param (expected key=value): {q}[/red]")
                 raise typer.Exit(1)
 
     # Parse extra headers
@@ -1644,7 +1656,7 @@ def cmd_call(
                 k, v = h.split(":", 1)
                 extra_headers[k.strip()] = v.strip()
             else:
-                console.print(f"[red]Invalid header (expected Key:Value): {h}[/red]")
+                err_console.print(f"[red]Invalid header (expected Key:Value): {h}[/red]")
                 raise typer.Exit(1)
 
     # Build URL
@@ -1657,41 +1669,55 @@ def cmd_call(
     headers.update(get_auth_headers(profile))
     headers.update(extra_headers)
 
+    _verbose(f"Headers: {_redact_headers(headers)}")
+    if json_body:
+        _verbose("Body: [present, redacted for safety]")
+
     start_time = time.perf_counter()
 
-    with httpx.Client(verify=verify, timeout=60.0, follow_redirects=True) as client:
-        if stream:
-            console.print(f"[dim]{method} {full_path} (streaming)...[/dim]")
-            headers["Accept"] = "text/event-stream"
-            with client.stream(
-                method,
-                url,
-                json=json_body,
-                params=params or None,
-                headers=headers,
-            ) as response:
+    try:
+        with _make_client(verify=verify) as client:
+            if stream:
+                err_console.print(f"[dim]{method} {full_path} (streaming)...[/dim]")
+                headers["Accept"] = "text/event-stream"
+                with client.stream(
+                    method,
+                    url,
+                    json=json_body,
+                    params=params or None,
+                    headers=headers,
+                ) as response:
+                    _verbose(f"Response: {response.status_code}")
+                    if response.status_code >= 400:
+                        response.read()
+                        _display_error(
+                            _safe_json_or_text(response),
+                            response.status_code,
+                        )
+                        raise typer.Exit(1)
+                    stream_sse(response)
+                elapsed = time.perf_counter() - start_time
+                err_console.print(f"[dim]Completed in {elapsed:.2f}s[/dim]")
+            else:
+                err_console.print(f"[dim]{method} {full_path}...[/dim]")
+                response = _request_with_retry(
+                    client,
+                    method,
+                    url,
+                    json=json_body,
+                    params=params or None,
+                    headers=headers,
+                )
+                elapsed = time.perf_counter() - start_time
+                _verbose(f"Response: {response.status_code} {response.reason_phrase}")
+                _verbose(f"Response headers: {_redact_headers(dict(response.headers))}")
+                handle_response(response, raw=raw, json_output=output_json_flag)
+                err_console.print(f"[dim]{elapsed:.2f}s[/dim]")
                 if response.status_code >= 400:
-                    response.read()
-                    _display_error(
-                        response.json() if "json" in response.headers.get("content-type", "") else response.text,
-                        response.status_code,
-                    )
                     raise typer.Exit(1)
-                stream_sse(response)
-            elapsed = time.perf_counter() - start_time
-            console.print(f"[dim]Completed in {elapsed:.2f}s[/dim]")
-        else:
-            console.print(f"[dim]{method} {full_path}...[/dim]")
-            response = client.request(
-                method,
-                url,
-                json=json_body,
-                params=params or None,
-                headers=headers,
-            )
-            elapsed = time.perf_counter() - start_time
-            handle_response(response, raw=raw, json_output=output_json_flag)
-            console.print(f"[dim]{elapsed:.2f}s[/dim]")
+    except httpx.HTTPError as e:
+        err_console.print(f"[red]Request failed: {e}[/red]")
+        raise typer.Exit(1)
 
 
 # ── Commands: run ──────────────────────────────────────────────────────────────
@@ -1719,8 +1745,12 @@ def _route_inputs(input_data: dict, parameters: list, has_request_body: bool) ->
             query_params[key] = value
         elif location == "header":
             header_params[key] = value
+        elif location == "cookie":
+            # Cookie params are set via Cookie header
+            existing = header_params.get("Cookie", "")
+            header_params["Cookie"] = f"{existing}; {key}={value}".lstrip("; ")
         elif location:
-            # cookie or other — treat as query
+            # Other parameter locations — treat as query
             query_params[key] = value
         else:
             # Not a declared parameter — goes into request body
@@ -1772,35 +1802,43 @@ def cmd_run(
             endpoint = extract_full_endpoint_schema(spec, matches[0]["operationId"])
 
     if not endpoint:
-        console.print(f"[red]Operation '{operation}' not found in spec.[/red]")
+        err_console.print(f"[red]Operation '{operation}' not found in spec.[/red]")
         # Suggest similar operations
         all_eps = extract_endpoint_summaries(spec)
         op_lower = operation.lower()
         suggestions = [e["operationId"] for e in all_eps if op_lower in e["operationId"].lower()][:5]
         if suggestions:
-            console.print("[dim]Did you mean:[/dim]")
+            err_console.print("[dim]Did you mean:[/dim]")
             for s in suggestions:
-                console.print(f"  [cyan]{s}[/cyan]")
+                err_console.print(f"  [cyan]{s}[/cyan]")
         raise typer.Exit(1)
 
     # Parse input
-    parsed_input = {}
+    parsed_input: dict = {}
     if input_file:
-        fp = Path(input_file)
+        fp = _resolve_file_path(input_file, purpose="input")
         if not fp.exists():
-            console.print(f"[red]Input file not found: {input_file}[/red]")
+            err_console.print(f"[red]Input file not found: {input_file}[/red]")
             raise typer.Exit(1)
         try:
-            parsed_input = json.loads(fp.read_text())
+            raw_input = json.loads(fp.read_text())
         except json.JSONDecodeError as e:
-            console.print(f"[red]Invalid JSON in {input_file}: {e}[/red]")
+            err_console.print(f"[red]Invalid JSON in {input_file}: {e}[/red]")
             raise typer.Exit(1)
+        if not isinstance(raw_input, dict):
+            err_console.print("[red]Input must be a JSON object, not an array or scalar.[/red]")
+            raise typer.Exit(1)
+        parsed_input = raw_input
     elif input_data:
         try:
-            parsed_input = json.loads(input_data)
+            raw_input = json.loads(input_data)
         except json.JSONDecodeError as e:
-            console.print(f"[red]Invalid JSON input: {e}[/red]")
+            err_console.print(f"[red]Invalid JSON input: {e}[/red]")
             raise typer.Exit(1)
+        if not isinstance(raw_input, dict):
+            err_console.print("[red]Input must be a JSON object, not an array or scalar.[/red]")
+            raise typer.Exit(1)
+        parsed_input = raw_input
 
     # Route inputs to the right places
     method = endpoint["method"]
@@ -1810,18 +1848,16 @@ def cmd_run(
 
     path_params, query_params, header_params, json_body = _route_inputs(parsed_input, parameters, has_request_body)
 
-    # Substitute path parameters
+    # Substitute path parameters (URL-encode values for safety)
     full_path = path_template
     for key, value in path_params.items():
-        full_path = full_path.replace(f"{{{key}}}", str(value))
+        full_path = full_path.replace(f"{{{key}}}", urllib.parse.quote(str(value), safe=""))
 
     # Check for unresolved path params
     if "{" in full_path:
-        import re as _re
-
-        missing = _re.findall(r"\{(\w+)\}", full_path)
-        console.print(f"[red]Missing required path parameter(s): {', '.join(missing)}[/red]")
-        console.print(f'[dim]Provide them in --input, e.g. --input \'{{"{missing[0]}": "value"}}\'[/dim]')
+        missing = re.findall(r"\{(\w+)\}", full_path)
+        err_console.print(f"[red]Missing required path parameter(s): {', '.join(missing)}[/red]")
+        err_console.print(f'[dim]Provide them in --input, e.g. --input \'{{"{missing[0]}": "value"}}\'[/dim]')
         raise typer.Exit(1)
 
     # Build URL and make request
@@ -1833,40 +1869,50 @@ def cmd_run(
     headers.update(get_auth_headers(profile))
     headers.update(header_params)
 
-    start_time = time.perf_counter()
-    console.print(f"[dim]{method} {full_path}...[/dim]")
+    _verbose(f"Headers: {_redact_headers(headers)}")
 
-    with httpx.Client(verify=verify, timeout=60.0, follow_redirects=True) as client:
-        if stream:
-            headers["Accept"] = "text/event-stream"
-            with client.stream(
-                method,
-                url,
-                json=json_body,
-                params=query_params or None,
-                headers=headers,
-            ) as response:
+    start_time = time.perf_counter()
+    err_console.print(f"[dim]{method} {full_path}...[/dim]")
+
+    try:
+        with _make_client(verify=verify) as client:
+            if stream:
+                headers["Accept"] = "text/event-stream"
+                with client.stream(
+                    method,
+                    url,
+                    json=json_body,
+                    params=query_params or None,
+                    headers=headers,
+                ) as response:
+                    _verbose(f"Response: {response.status_code}")
+                    if response.status_code >= 400:
+                        response.read()
+                        _display_error(
+                            _safe_json_or_text(response),
+                            response.status_code,
+                        )
+                        raise typer.Exit(1)
+                    stream_sse(response)
+                elapsed = time.perf_counter() - start_time
+                err_console.print(f"[dim]Completed in {elapsed:.2f}s[/dim]")
+            else:
+                response = _request_with_retry(
+                    client,
+                    method,
+                    url,
+                    json=json_body,
+                    params=query_params or None,
+                    headers=headers,
+                )
+                elapsed = time.perf_counter() - start_time
+                handle_response(response, raw=raw, json_output=output_json_flag)
+                err_console.print(f"[dim]{elapsed:.2f}s[/dim]")
                 if response.status_code >= 400:
-                    response.read()
-                    _display_error(
-                        response.json() if "json" in response.headers.get("content-type", "") else response.text,
-                        response.status_code,
-                    )
                     raise typer.Exit(1)
-                stream_sse(response)
-            elapsed = time.perf_counter() - start_time
-            console.print(f"[dim]Completed in {elapsed:.2f}s[/dim]")
-        else:
-            response = client.request(
-                method,
-                url,
-                json=json_body,
-                params=query_params or None,
-                headers=headers,
-            )
-            elapsed = time.perf_counter() - start_time
-            handle_response(response, raw=raw, json_output=output_json_flag)
-            console.print(f"[dim]{elapsed:.2f}s[/dim]")
+    except httpx.HTTPError as e:
+        err_console.print(f"[red]Request failed: {e}[/red]")
+        raise typer.Exit(1)
 
 
 # ── Commands: init ─────────────────────────────────────────────────────────────
@@ -1909,6 +1955,21 @@ def cmd_init(
     if not url:
         url = typer.prompt("Base URL of the API")
 
+    # Auto-prepend http:// if no scheme provided
+    if not url.startswith(("http://", "https://")):
+        # urlparse misparses "host:port" as scheme="host", so check for
+        # real URL schemes (contain "://") vs bare host:port patterns
+        if "://" in url:
+            scheme = url.split("://", 1)[0].lower()
+            if scheme not in ("http", "https"):
+                console.print(
+                    f"[red]Unsupported URL scheme '{scheme}://'. Only http:// and https:// are supported.[/red]"
+                )
+                raise typer.Exit(1)
+        else:
+            url = f"http://{url}"
+            err_console.print(f"[dim]No scheme provided — using {url}[/dim]")
+
     url = url.rstrip("/")
 
     # Check if profile already exists
@@ -1934,7 +1995,7 @@ def cmd_init(
     resolved_spec_path = None
     if not spec_url and not spec_path:
         console.print("[dim]Auto-detecting OpenAPI spec location...[/dim]")
-        with httpx.Client(verify=get_verify_ssl(), timeout=10.0, follow_redirects=True) as client:
+        with _make_client(verify=get_verify_ssl()) as client:
             for try_path in COMMON_SPEC_PATHS:
                 try:
                     resp = client.get(f"{url}{try_path}")
@@ -1950,7 +2011,7 @@ def cmd_init(
                                     break
                             except (json.JSONDecodeError, yaml.YAMLError):
                                 continue
-                except (httpx.HTTPError, OSError, KeyError, ValueError):
+                except (httpx.HTTPError, OSError):
                     continue
 
         if resolved_spec_path:
@@ -1967,7 +2028,7 @@ def cmd_init(
             # Static token from env var
             env_var = typer.prompt("Environment variable for token", default=f"{name.upper()}_TOKEN")
             profile["auth"]["token_env_var"] = env_var
-            console.print(f"[dim]Set {env_var} in your environment or add it to a .env file.[/dim]")
+            err_console.print(f"[dim]Set {env_var} in your environment or add it to a .env file.[/dim]")
         else:
             # Token endpoint (username/password login)
             token_ep = typer.prompt("Token endpoint path", default="/api/auth/token")
@@ -2022,8 +2083,8 @@ def cmd_init(
                 border_style="green",
             )
         )
-    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, yaml.YAMLError, ValueError, OSError) as e:
-        console.print(f"[yellow]Warning: Could not validate spec ({e}). Profile saved anyway.[/yellow]")
+    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, yaml.YAMLError, OSError, ValueError) as e:
+        err_console.print(f"[yellow]Warning: Could not validate spec ({e}). Profile saved anyway.[/yellow]")
 
     # Save profile
     del profile["_name"]
@@ -2032,7 +2093,7 @@ def cmd_init(
     save_profiles(data)
 
     console.print(f"\n[green]Profile '{name}' created and set as active.[/green]")
-    console.print(f"[dim]Config saved to {CONFIG_FILE}[/dim]")
+    err_console.print(f"[dim]Config saved to {CONFIG_FILE}[/dim]")
     console.print("\n[bold]Next steps:[/bold]")
     console.print("  openapi-cli4ai endpoints           [dim]# List available endpoints[/dim]")
     console.print("  openapi-cli4ai endpoints -s keyword [dim]# Search endpoints[/dim]")
@@ -2217,16 +2278,16 @@ def cmd_login(
     resolved_password = ""
     if needs_password:
         if password_file:
-            pf = Path(password_file)
+            pf = _resolve_file_path(password_file, purpose="password")
             if not pf.exists():
                 console.print(f"[red]Password file not found: {password_file}[/red]")
                 raise typer.Exit(1)
-            resolved_password = pf.read_text().strip()
+            resolved_password = pf.read_text().rstrip("\n\r")
         elif password_stdin:
             if sys.stdin.isatty():
                 console.print("[red]--password-stdin requires piped input.[/red]")
                 raise typer.Exit(1)
-            resolved_password = sys.stdin.read().strip()
+            resolved_password = sys.stdin.read().rstrip("\n\r")
         elif password:
             resolved_password = password
         else:
@@ -2235,11 +2296,18 @@ def cmd_login(
     if needs_username and not username:
         username = typer.prompt("Username")
 
+    # Build payload safely — use dict assignment, not string replacement,
+    # to prevent JSON injection via special characters in username/password
     payload = {}
     for k, v in payload_template.items():
-        if isinstance(v, str):
-            v = v.replace("{username}", username).replace("{password}", resolved_password)
-        payload[k] = v
+        if isinstance(v, str) and v == "{username}":
+            payload[k] = username
+        elif isinstance(v, str) and v == "{password}":
+            payload[k] = resolved_password
+        elif isinstance(v, str):
+            payload[k] = v.replace("{username}", username).replace("{password}", resolved_password)
+        else:
+            payload[k] = v
 
     # Make token request
     base_url = profile["base_url"].rstrip("/")
@@ -2253,7 +2321,7 @@ def cmd_login(
 
         if resp.status_code != 200:
             _display_error(
-                resp.json() if "json" in resp.headers.get("content-type", "") else resp.text,
+                _safe_json_or_text(resp),
                 resp.status_code,
             )
             raise typer.Exit(1)
@@ -2457,20 +2525,35 @@ def cmd_profile_remove(
     """Remove a profile."""
     data = load_profiles()
     if name not in data.get("profiles", {}):
-        console.print(f"[red]Profile '{name}' not found.[/red]")
+        err_console.print(f"[red]Profile '{name}' not found.[/red]")
         raise typer.Exit(1)
 
     if not force and not typer.confirm(f"Remove profile '{name}'?"):
         raise typer.Exit(0)
+
+    # Resolve spec cache paths before deleting the profile
+    profile = data["profiles"][name]
+    try:
+        profile["_name"] = name
+        spec_url = _resolve_spec_url(profile)
+        spec_cache, spec_meta = _spec_cache_paths(spec_url)
+    except (KeyError, TypeError):
+        spec_cache, spec_meta = None, None
 
     del data["profiles"][name]
     if data.get("active_profile") == name:
         data["active_profile"] = next(iter(data["profiles"]), None)
     save_profiles(data)
 
-    # Clean up cached spec and token
-    for f in CACHE_DIR.glob(f"{name}_*"):
-        f.unlink(missing_ok=True)
+    # Clean up cached token file (exact match by profile name)
+    token_cache = CACHE_DIR / f"{_safe_profile_name(name)}_token.json"
+    token_cache.unlink(missing_ok=True)
+
+    # Clean up cached spec files (keyed by URL hash)
+    if spec_cache and spec_cache.exists():
+        spec_cache.unlink(missing_ok=True)
+    if spec_meta and spec_meta.exists():
+        spec_meta.unlink(missing_ok=True)
 
     console.print(f"[green]Profile '{name}' removed.[/green]")
 
@@ -2484,7 +2567,7 @@ def cmd_profile_show(
     if not name:
         name = data.get("active_profile")
     if not name or name not in data.get("profiles", {}):
-        console.print(f"[red]Profile '{name}' not found.[/red]")
+        err_console.print(f"[red]Profile '{name}' not found.[/red]")
         raise typer.Exit(1)
 
     profile = data["profiles"][name]
@@ -2507,13 +2590,20 @@ def main(
     ctx: typer.Context,
     version: Annotated[bool, typer.Option("--version", help="Show version")] = False,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show request/response details")] = False,
+    timeout: Annotated[float, typer.Option("--timeout", help="HTTP timeout in seconds")] = 60.0,
+    retries: Annotated[int, typer.Option("--retries", help="Retry count for 429/503 responses")] = 0,
 ) -> None:
     """openapi-cli4ai — Interact with any REST API using natural language.
 
     Point it at an OpenAPI spec. Discover endpoints. Call them directly or let
     an LLM figure out the right one from your natural language query.
     """
+    global _verbose_mode, _timeout_seconds, _max_retries
     set_insecure_mode(insecure)
+    _verbose_mode = verbose
+    _timeout_seconds = timeout
+    _max_retries = retries
 
     if version:
         console.print(f"{APP_NAME} {VERSION}")
