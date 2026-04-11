@@ -1976,7 +1976,7 @@ def cmd_init(
         if "://" in url:
             scheme = url.split("://", 1)[0].lower()
             if scheme not in ("http", "https"):
-                console.print(
+                err_console.print(
                     f"[red]Unsupported URL scheme '{scheme}://'. Only http:// and https:// are supported.[/red]"
                 )
                 raise typer.Exit(1)
@@ -2274,10 +2274,10 @@ def cmd_login(
         return
 
     if auth_type != "bearer" or not auth_config.get("token_endpoint"):
-        console.print(
+        err_console.print(
             "[yellow]Login is for profiles with bearer auth + token_endpoint, oidc, device, or auto.[/yellow]"
         )
-        console.print("[dim]If your API uses a static token or API key, set the environment variable instead.[/dim]")
+        err_console.print("[dim]If your API uses a static token or API key, set the environment variable instead.[/dim]")
         raise typer.Exit(1)
 
     # Build payload from config ({env:VAR} already resolved at profile load)
