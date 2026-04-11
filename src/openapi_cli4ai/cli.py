@@ -1901,13 +1901,17 @@ def cmd_run(
     has_request_body = endpoint.get("requestBody") is not None
 
     # If json_body was already set (array input), skip parameter routing but warn
-    # if the operation expects path/query/header params that can't be supplied
+    # about any declared params that can't be supplied from an array body
     if json_body is not None:
         path_params, query_params, header_params = {}, {}, {}
-        required_params = [p["name"] for p in parameters if isinstance(p, dict) and p.get("in") == "path"]
-        if required_params:
+        unsupplied = [
+            f"{p['name']} ({p.get('in', '?')})"
+            for p in parameters
+            if isinstance(p, dict) and p.get("in") in ("path", "query", "header", "cookie")
+        ]
+        if unsupplied:
             err_console.print(
-                f"[yellow]Warning: Array body input cannot supply path parameters: {', '.join(required_params)}[/yellow]"
+                f"[yellow]Warning: Array body input cannot supply parameters: {', '.join(unsupplied)}[/yellow]"
             )
     else:
         path_params, query_params, header_params, json_body = _route_inputs(parsed_input, parameters, has_request_body)
@@ -2377,18 +2381,22 @@ def cmd_login(
     if needs_username and not username:
         username = typer.prompt("Username")
 
-    # Build payload safely — use dict assignment, not string replacement,
-    # to prevent JSON injection via special characters in username/password
-    payload = {}
-    for k, v in payload_template.items():
-        if isinstance(v, str) and v == "{username}":
-            payload[k] = username
-        elif isinstance(v, str) and v == "{password}":
-            payload[k] = resolved_password
-        elif isinstance(v, str):
-            payload[k] = v.replace("{username}", username).replace("{password}", resolved_password)
-        else:
-            payload[k] = v
+    # Build payload safely — substitute placeholders recursively,
+    # using value assignment (not string interpolation) to prevent JSON injection
+    def _substitute_placeholders(obj: Any) -> Any:
+        if isinstance(obj, str):
+            if obj == "{username}":
+                return username
+            if obj == "{password}":
+                return resolved_password
+            return obj.replace("{username}", username).replace("{password}", resolved_password)
+        if isinstance(obj, dict):
+            return {k: _substitute_placeholders(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_substitute_placeholders(item) for item in obj]
+        return obj
+
+    payload = _substitute_placeholders(payload_template)
 
     # Make token request
     base_url = profile["base_url"].rstrip("/")
