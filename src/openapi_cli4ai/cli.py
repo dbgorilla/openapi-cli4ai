@@ -145,15 +145,17 @@ def _verbose(msg: str) -> None:
         err_console.print(f"[dim]> {msg}[/dim]")
 
 
-def _make_client(verify: bool = True) -> httpx.Client:
+def _make_client(verify: bool = True, follow_redirects: bool = True) -> httpx.Client:
     """Create a configured httpx.Client with the global timeout.
 
     Callers are responsible for retry logic when _max_retries > 0.
+    Set follow_redirects=False for auth requests that send credentials
+    to prevent replay of secrets on 307/308 redirects.
     """
     return httpx.Client(
         verify=verify,
         timeout=_timeout_seconds,
-        follow_redirects=True,
+        follow_redirects=follow_redirects,
     )
 
 
@@ -765,7 +767,7 @@ def _try_refresh_token(profile: dict, auth_config: dict, cached: dict) -> dict |
     try:
         base_url = profile["base_url"].rstrip("/")
         verify = profile.get("verify_ssl", True) and get_verify_ssl()
-        with _make_client(verify=verify) as client:
+        with _make_client(verify=verify, follow_redirects=False) as client:
             resp = client.post(
                 f"{base_url}{refresh_endpoint}",
                 headers={"Authorization": f"Bearer {cached['refresh_token']}"},
@@ -829,7 +831,7 @@ def _oidc_refresh(auth_config: dict, cached: dict, verify: bool = True) -> dict 
     if not token_url or not client_id:
         return None
     try:
-        with _make_client(verify=verify) as client:
+        with _make_client(verify=verify, follow_redirects=False) as client:
             resp = client.post(
                 token_url,
                 data={
@@ -1036,7 +1038,7 @@ def _oidc_exchange_code(
 ) -> None:
     """Exchange an authorization code for tokens and cache them."""
     try:
-        with _make_client(verify=verify) as client:
+        with _make_client(verify=verify, follow_redirects=False) as client:
             resp = client.post(
                 token_url,
                 data={
@@ -1115,7 +1117,7 @@ def _token_exchange(
 
     exchange_url = f"{base_url.rstrip('/')}{exchange_endpoint}"
     try:
-        with _make_client(verify=verify) as client:
+        with _make_client(verify=verify, follow_redirects=False) as client:
             resp = client.post(
                 exchange_url,
                 json=exchange_body,
@@ -1213,7 +1215,7 @@ def _device_login(
 
     # Step 1: Request device code
     try:
-        with _make_client(verify=verify) as client:
+        with _make_client(verify=verify, follow_redirects=False) as client:
             resp = client.post(
                 device_ep,
                 data={"client_id": client_id, "scope": scopes},
@@ -1253,7 +1255,7 @@ def _device_login(
 
     # Step 3: Poll for token
     deadline = time.time() + expires_in
-    with _make_client(verify=verify) as client:
+    with _make_client(verify=verify, follow_redirects=False) as client:
         while time.time() < deadline:
             time.sleep(interval)
             try:
@@ -2373,7 +2375,7 @@ def cmd_login(
     verify = profile.get("verify_ssl", True) and get_verify_ssl()
 
     try:
-        with _make_client(verify=verify) as client:
+        with _make_client(verify=verify, follow_redirects=False) as client:
             resp = client.post(token_url, json=payload)
 
         if resp.status_code != 200:
