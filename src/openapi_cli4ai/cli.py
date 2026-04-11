@@ -1434,9 +1434,9 @@ def handle_response(response: httpx.Response, raw: bool = False, json_output: bo
         try:
             data = response.json()
         except json.JSONDecodeError:
-            # Content-Type says JSON but body isn't valid JSON
+            # Content-Type says JSON but body isn't valid JSON — show as-is
             if json_output:
-                print(json.dumps({"error": response.text}, indent=2))
+                print(json.dumps({"body": response.text, "content_type": content_type}, indent=2))
             else:
                 console.print(response.text)
             data = None
