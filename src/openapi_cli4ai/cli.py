@@ -1860,7 +1860,7 @@ def cmd_run(
 
     # Parse input
     parsed_input: dict = {}
-    json_body = None  # Set directly for array inputs, otherwise set by _route_inputs
+    json_body: dict | list | None = None  # Set directly for array inputs, otherwise by _route_inputs
     if input_file:
         fp = _resolve_file_path(input_file, purpose="input")
         if not fp.exists():
@@ -1900,12 +1900,15 @@ def cmd_run(
     parameters = endpoint.get("parameters", [])
     has_request_body = endpoint.get("requestBody") is not None
 
-    # If json_body was already set (array input), validate and skip parameter routing
-    if json_body is not None and not has_request_body:
-        err_console.print("[red]This operation does not accept a request body. Array input is not valid here.[/red]")
-        raise typer.Exit(1)
+    # Route inputs or use pre-set array body
+    path_params: dict = {}
+    query_params: dict = {}
+    header_params: dict = {}
     if json_body is not None:
-        path_params, query_params, header_params = {}, {}, {}
+        # Array input: validate it's appropriate and warn about unsupplied params
+        if not has_request_body:
+            err_console.print("[red]This operation does not accept a request body. Array input is not valid here.[/red]")
+            raise typer.Exit(1)
         unsupplied = [
             f"{p['name']} ({p.get('in', '?')})"
             for p in parameters
@@ -1916,7 +1919,9 @@ def cmd_run(
                 f"[yellow]Warning: Array body input cannot supply parameters: {', '.join(unsupplied)}[/yellow]"
             )
     else:
-        path_params, query_params, header_params, json_body = _route_inputs(parsed_input, parameters, has_request_body)
+        routed_body: dict | list | None
+        path_params, query_params, header_params, routed_body = _route_inputs(parsed_input, parameters, has_request_body)
+        json_body = routed_body
 
     # Substitute path parameters (URL-encode values for safety)
     full_path = path_template
