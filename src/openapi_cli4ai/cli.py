@@ -525,8 +525,13 @@ def _merge_allof(schemas: list[dict]) -> dict:
         if not isinstance(s, dict):
             continue
         for k, v in s.items():
-            if k == "properties":
-                properties.update(v)
+            if k == "properties" and isinstance(v, dict):
+                for prop_name, prop_schema in v.items():
+                    if prop_name in properties and isinstance(properties[prop_name], dict) and isinstance(prop_schema, dict):
+                        # Deep-merge: combine keys from both schemas for the same property
+                        properties[prop_name] = {**properties[prop_name], **prop_schema}
+                    else:
+                        properties[prop_name] = prop_schema
             elif k == "required":
                 required.extend(v)
             else:
@@ -1919,14 +1924,25 @@ def cmd_run(
             )
             err_console.print("[dim]Use 'call' command with explicit path for operations that need both array body and path params.[/dim]")
             raise typer.Exit(1)
+        required_nonpath = [
+            f"{p['name']} ({p.get('in', '?')})"
+            for p in parameters
+            if isinstance(p, dict) and p.get("in") in ("query", "header", "cookie") and p.get("required")
+        ]
+        if required_nonpath:
+            err_console.print(
+                f"[red]Array body input cannot supply required parameters: {', '.join(required_nonpath)}[/red]"
+            )
+            err_console.print("[dim]Use 'call' command for operations that need both array body and parameters.[/dim]")
+            raise typer.Exit(1)
         optional_params = [
             f"{p['name']} ({p.get('in', '?')})"
             for p in parameters
-            if isinstance(p, dict) and p.get("in") in ("query", "header", "cookie")
+            if isinstance(p, dict) and p.get("in") in ("query", "header", "cookie") and not p.get("required")
         ]
         if optional_params:
             err_console.print(
-                f"[yellow]Warning: Array body input cannot supply parameters: {', '.join(optional_params)}[/yellow]"
+                f"[yellow]Warning: Array body input cannot supply optional parameters: {', '.join(optional_params)}[/yellow]"
             )
     else:
         routed_body: dict | list | None
