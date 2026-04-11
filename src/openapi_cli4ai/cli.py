@@ -2083,6 +2083,7 @@ def cmd_init(
     if not spec_url and not spec_path:
         console.print("[dim]Auto-detecting OpenAPI spec location...[/dim]")
         with _make_client(verify=get_verify_ssl()) as client:
+            client.timeout = httpx.Timeout(10.0)  # Short timeout for spec probing
             for try_path in COMMON_SPEC_PATHS:
                 try:
                     resp = client.get(f"{url}{try_path}")
