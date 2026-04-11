@@ -554,12 +554,11 @@ def resolve_refs(schema: Any, spec_root: dict, max_depth: int = 10) -> Any:
                     return schema
             resolved_schema = resolve_refs(resolved, spec_root, max_depth - 1)
             # Preserve sibling keys alongside $ref (e.g., description, nullable)
+            # Local siblings override component values per OpenAPI 3.1 spec
             siblings = {k: v for k, v in schema.items() if k != "$ref"}
             if siblings and isinstance(resolved_schema, dict):
                 merged = dict(resolved_schema)
-                for k, v in siblings.items():
-                    if k not in merged:
-                        merged[k] = v
+                merged.update(siblings)
                 return merged
             return resolved_schema
 
@@ -567,9 +566,9 @@ def resolve_refs(schema: Any, spec_root: dict, max_depth: int = 10) -> Any:
         if "allOf" in schema:
             resolved_schemas = [resolve_refs(s, spec_root, max_depth - 1) for s in schema["allOf"]]
             merged = _merge_allof(resolved_schemas)
-            # Preserve any sibling keys (description, etc.) from the parent
+            # Parent wrapper metadata overrides child values (e.g., description on allOf wrapper)
             for k, v in schema.items():
-                if k != "allOf" and k not in merged:
+                if k != "allOf":
                     merged[k] = resolve_refs(v, spec_root, max_depth - 1)
             return merged
 
@@ -1704,10 +1703,15 @@ def cmd_call(
                     _verbose(f"Response: {response.status_code}")
                     if response.status_code >= 400:
                         response.read()
-                        _display_error(
-                            _safe_json_or_text(response),
-                            response.status_code,
-                        )
+                        error_data = _safe_json_or_text(response)
+                        if raw or output_json_flag:
+                            if isinstance(error_data, (dict, list)):
+                                console.print_json(json.dumps(error_data))
+                            else:
+                                console.print(str(error_data))
+                            err_console.print(f"[red]HTTP {response.status_code}[/red]")
+                        else:
+                            _display_error(error_data, response.status_code)
                         raise typer.Exit(1)
                     stream_sse(response)
                 elapsed = time.perf_counter() - start_time
@@ -1902,10 +1906,15 @@ def cmd_run(
                     _verbose(f"Response: {response.status_code}")
                     if response.status_code >= 400:
                         response.read()
-                        _display_error(
-                            _safe_json_or_text(response),
-                            response.status_code,
-                        )
+                        error_data = _safe_json_or_text(response)
+                        if raw or output_json_flag:
+                            if isinstance(error_data, (dict, list)):
+                                console.print_json(json.dumps(error_data))
+                            else:
+                                console.print(str(error_data))
+                            err_console.print(f"[red]HTTP {response.status_code}[/red]")
+                        else:
+                            _display_error(error_data, response.status_code)
                         raise typer.Exit(1)
                     stream_sse(response)
                 elapsed = time.perf_counter() - start_time
