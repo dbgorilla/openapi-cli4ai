@@ -1110,10 +1110,8 @@ def _token_exchange(
             err_console.print("[red]Token exchange body template produced invalid JSON[/red]")
             raise typer.Exit(1)
     else:
-        # Default: safe dict construction (no string interpolation)
+        # Default: safe dict construction, backward-compatible payload shape
         exchange_body = {"access_token": token_data.get("access_token", "")}
-        if token_data.get("refresh_token"):
-            exchange_body["refresh_token"] = token_data["refresh_token"]
 
     exchange_url = f"{base_url.rstrip('/')}{exchange_endpoint}"
     try:
