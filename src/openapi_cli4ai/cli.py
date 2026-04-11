@@ -1909,14 +1909,24 @@ def cmd_run(
         if not has_request_body:
             err_console.print("[red]This operation does not accept a request body. Array input is not valid here.[/red]")
             raise typer.Exit(1)
-        unsupplied = [
+        required_params = [
+            p["name"] for p in parameters
+            if isinstance(p, dict) and p.get("in") == "path"
+        ]
+        if required_params:
+            err_console.print(
+                f"[red]Array body input cannot supply required path parameters: {', '.join(required_params)}[/red]"
+            )
+            err_console.print("[dim]Use 'call' command with explicit path for operations that need both array body and path params.[/dim]")
+            raise typer.Exit(1)
+        optional_params = [
             f"{p['name']} ({p.get('in', '?')})"
             for p in parameters
-            if isinstance(p, dict) and p.get("in") in ("path", "query", "header", "cookie")
+            if isinstance(p, dict) and p.get("in") in ("query", "header", "cookie")
         ]
-        if unsupplied:
+        if optional_params:
             err_console.print(
-                f"[yellow]Warning: Array body input cannot supply parameters: {', '.join(unsupplied)}[/yellow]"
+                f"[yellow]Warning: Array body input cannot supply parameters: {', '.join(optional_params)}[/yellow]"
             )
     else:
         routed_body: dict | list | None
@@ -2632,7 +2642,8 @@ def cmd_profile_remove(
         raise typer.Exit(0)
 
     # Resolve spec cache paths before deleting the profile
-    profile = data["profiles"][name]
+    # Must resolve env vars so the hash matches what fetch_spec used
+    profile = _resolve_env_vars(data["profiles"][name])
     try:
         profile["_name"] = name
         spec_url = _resolve_spec_url(profile)
