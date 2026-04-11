@@ -444,7 +444,7 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
         try:
             auth_headers = get_auth_headers(profile, quiet=True)
             headers.update(auth_headers)
-        except (typer.Exit, httpx.HTTPError, OSError, KeyError, TypeError, ValueError) as e:
+        except (typer.Exit, httpx.HTTPError, OSError, KeyError, TypeError, ValueError, AttributeError) as e:
             _verbose(f"Auth headers unavailable for spec fetch: {e}")
 
         with _make_client(verify=verify) as client:
@@ -1900,8 +1900,10 @@ def cmd_run(
     parameters = endpoint.get("parameters", [])
     has_request_body = endpoint.get("requestBody") is not None
 
-    # If json_body was already set (array input), skip parameter routing but warn
-    # about any declared params that can't be supplied from an array body
+    # If json_body was already set (array input), validate and skip parameter routing
+    if json_body is not None and not has_request_body:
+        err_console.print("[red]This operation does not accept a request body. Array input is not valid here.[/red]")
+        raise typer.Exit(1)
     if json_body is not None:
         path_params, query_params, header_params = {}, {}, {}
         unsupplied = [
