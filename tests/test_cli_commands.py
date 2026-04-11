@@ -156,6 +156,7 @@ class TestCmdCall:
         assert result.exit_code == 1
         assert "key:value" in result.output.lower()
 
+    @pytest.mark.integration
     def test_call_body_from_file(self, setup_petstore, tmp_path):
         """--body @file.json should load body from file."""
         body_file = tmp_path / "body.json"
@@ -220,6 +221,7 @@ class TestCmdRun:
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
+    @pytest.mark.integration
     def test_run_case_insensitive_match(self, setup_petstore):
         """Operation lookup should be case-insensitive."""
         # The petstore spec has "findPetsByStatus"

@@ -299,7 +299,7 @@ def _require_env_var(env_var: str, label: str, quiet: bool = False) -> str:
     value = os.environ.get(env_var, "")
     if not value:
         if not quiet:
-            console.print(f"[red]Set the {env_var} environment variable with your {label}.[/red]")
+            err_console.print(f"[red]Set the {env_var} environment variable with your {label}.[/red]")
         raise typer.Exit(1)
     return value
 
@@ -471,7 +471,7 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
                 return json.loads(cache_file.read_text())
             except (json.JSONDecodeError, OSError):
                 pass
-        console.print(f"[red]Failed to fetch spec from {spec_url}: {e}[/red]")
+        err_console.print(f"[red]Failed to fetch spec from {spec_url}: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -686,7 +686,7 @@ def get_auth_headers(profile: dict, quiet: bool = False) -> dict:
         return _basic_auth(auth_config, quiet)
     else:
         if not quiet:
-            console.print(f"[red]Unknown auth type: {auth_type}[/red]")
+            err_console.print(f"[red]Unknown auth type: {auth_type}[/red]")
         raise typer.Exit(1)
 
 
@@ -706,7 +706,7 @@ def _bearer_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
         return _oauth_bearer(profile, auth_config, quiet)
 
     if not quiet:
-        console.print("[red]Bearer auth requires either token_env_var or token_endpoint in profile.[/red]")
+        err_console.print("[red]Bearer auth requires either token_env_var or token_endpoint in profile.[/red]")
     raise typer.Exit(1)
 
 
@@ -735,7 +735,7 @@ def _oauth_bearer(profile: dict, auth_config: dict, quiet: bool = False) -> dict
 
     # Need fresh login
     if not quiet:
-        console.print("[yellow]Token expired or missing. Run 'openapi-cli4ai login' to authenticate.[/yellow]")
+        err_console.print("[yellow]Token expired or missing. Run 'openapi-cli4ai login' to authenticate.[/yellow]")
     raise typer.Exit(1)
 
 
@@ -755,7 +755,7 @@ def _try_refresh_token(profile: dict, auth_config: dict, cached: dict) -> dict |
             if resp.status_code == 200:
                 new_data = resp.json()
                 if "expires_in" in new_data:
-                    new_data["expires_at"] = time.time() + new_data["expires_in"]
+                    new_data["expires_at"] = time.time() + float(new_data["expires_in"])
                 elif "expires_at" not in new_data:
                     new_data["expires_at"] = time.time() + 86400  # 24h default
                 # Preserve existing refresh_token if server omits a new one
@@ -790,7 +790,7 @@ def _oidc_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
                 verify = profile.get("verify_ssl", True) and get_verify_ssl()
                 refreshed = _oidc_refresh(auth_config, cached, verify=verify)
                 if refreshed:
-                    refreshed["expires_at"] = time.time() + refreshed.get("expires_in", 300)
+                    refreshed["expires_at"] = time.time() + float(refreshed.get("expires_in", 300))
                     # Preserve existing refresh_token if server omits a new one
                     if "refresh_token" not in refreshed and "refresh_token" in cached:
                         refreshed["refresh_token"] = cached["refresh_token"]
@@ -800,7 +800,7 @@ def _oidc_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
             pass
 
     if not quiet:
-        console.print("[yellow]Token expired or missing. Run 'openapi-cli4ai login' to authenticate.[/yellow]")
+        err_console.print("[yellow]Token expired or missing. Run 'openapi-cli4ai login' to authenticate.[/yellow]")
     raise typer.Exit(1)
 
 
@@ -892,7 +892,7 @@ def _oidc_login(
     redirect_uri = auth_config.get("redirect_uri", f"http://localhost:{callback_port}/callback")
 
     if not authorize_url or not token_url or not client_id:
-        console.print("[red]OIDC auth requires authorize_url, token_url, and client_id.[/red]")
+        err_console.print("[red]OIDC auth requires authorize_url, token_url, and client_id.[/red]")
         raise typer.Exit(1)
 
     # PKCE: generate code verifier + challenge
@@ -942,8 +942,8 @@ def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str, time
     try:
         server = HTTPServer(("127.0.0.1", callback_port), _OIDCCallbackHandler)
     except OSError as e:
-        console.print(f"[red]Cannot start OIDC callback server on port {callback_port}: {e}[/red]")
-        console.print(
+        err_console.print(f"[red]Cannot start OIDC callback server on port {callback_port}: {e}[/red]")
+        err_console.print(
             "[dim]Another process may be using this port. Try a different callback_port in your profile.[/dim]"
         )
         raise typer.Exit(1)
@@ -961,10 +961,10 @@ def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str, time
         server.server_close()
 
     if _OIDCCallbackHandler.error:
-        console.print(f"[red]OIDC error: {_OIDCCallbackHandler.error}[/red]")
+        err_console.print(f"[red]OIDC error: {_OIDCCallbackHandler.error}[/red]")
         raise typer.Exit(1)
     if not _OIDCCallbackHandler.auth_code:
-        console.print("[red]No authorization code received.[/red]")
+        err_console.print("[red]No authorization code received.[/red]")
         raise typer.Exit(1)
 
     return _OIDCCallbackHandler.auth_code
@@ -985,20 +985,20 @@ def _oidc_login_no_browser(full_auth_url: str, expected_state: str | None = None
     params = urllib.parse.parse_qs(parsed.query)
 
     if "error" in params:
-        console.print(f"[red]OIDC error: {params['error'][0]}[/red]")
+        err_console.print(f"[red]OIDC error: {params['error'][0]}[/red]")
         raise typer.Exit(1)
 
     # Validate state to prevent CSRF
     if expected_state:
         received_state = params.get("state", [None])[0]
         if received_state != expected_state:
-            console.print("[red]OIDC error: state mismatch — possible CSRF attack.[/red]")
-            console.print("[dim]The state parameter in the redirect URL does not match the expected value.[/dim]")
+            err_console.print("[red]OIDC error: state mismatch — possible CSRF attack.[/red]")
+            err_console.print("[dim]The state parameter in the redirect URL does not match the expected value.[/dim]")
             raise typer.Exit(1)
 
     if "code" not in params:
-        console.print("[red]No authorization code found in the URL.[/red]")
-        console.print("[dim]Expected a URL like: http://localhost:.../callback?code=...&state=...[/dim]")
+        err_console.print("[red]No authorization code found in the URL.[/red]")
+        err_console.print("[dim]Expected a URL like: http://localhost:.../callback?code=...&state=...[/dim]")
         raise typer.Exit(1)
 
     return params["code"][0]
@@ -1031,8 +1031,8 @@ def _oidc_exchange_code(
             )
 
         if resp.status_code != 200:
-            console.print(f"[red]Token exchange failed ({resp.status_code}):[/red]")
-            console.print(resp.text)
+            err_console.print(f"[red]Token exchange failed ({resp.status_code}):[/red]")
+            err_console.print(resp.text)
             raise typer.Exit(1)
 
         token_data = resp.json()
@@ -1042,7 +1042,7 @@ def _oidc_exchange_code(
             token_data = _token_exchange(token_data, auth_config, base_url, verify=verify)
 
         if "expires_in" in token_data:
-            token_data["expires_at"] = time.time() + token_data["expires_in"]
+            token_data["expires_at"] = time.time() + float(token_data["expires_in"])
         elif "expires_at" not in token_data:
             token_data["expires_at"] = time.time() + 86400
 
@@ -1052,7 +1052,7 @@ def _oidc_exchange_code(
         err_console.print(f"[dim]Token cached at {token_cache}[/dim]")
 
     except httpx.HTTPError as e:
-        console.print(f"[red]Token exchange failed: {e}[/red]")
+        err_console.print(f"[red]Token exchange failed: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -1077,10 +1077,10 @@ def _token_exchange(
     # Build exchange body safely via dict to prevent JSON injection from token values
     body_template = auth_config.get("token_exchange_body")
     if body_template:
-        # Custom template: replace placeholders then parse to validate JSON structure
-        body_str = body_template.replace("{access_token}", token_data.get("access_token", "")).replace(
-            "{refresh_token}", token_data.get("refresh_token", "")
-        )
+        # Escape token values for safe JSON substitution (handles quotes, backslashes, control chars)
+        safe_access = json.dumps(token_data.get("access_token", ""))[1:-1]  # strip surrounding quotes
+        safe_refresh = json.dumps(token_data.get("refresh_token", ""))[1:-1]
+        body_str = body_template.replace("{access_token}", safe_access).replace("{refresh_token}", safe_refresh)
         try:
             exchange_body = json.loads(body_str)
         except json.JSONDecodeError:
@@ -1215,7 +1215,7 @@ def _device_login(
         err_console.print(f"[red]Device authorization response missing required fields: {e}[/red]")
         raise typer.Exit(1)
     verification_uri_complete = device_data.get("verification_uri_complete")
-    expires_in = device_data.get("expires_in", 600)
+    expires_in = float(device_data.get("expires_in", 600))
     interval = device_data.get("interval", 5)
 
     # Step 2: Display instructions
@@ -1280,7 +1280,7 @@ def _device_login(
 
     # Step 5: Cache token
     if "expires_in" in token_data:
-        token_data["expires_at"] = time.time() + token_data["expires_in"]
+        token_data["expires_at"] = time.time() + float(token_data["expires_in"])
     elif "expires_at" not in token_data:
         token_data["expires_at"] = time.time() + 86400
 
@@ -1295,7 +1295,7 @@ def _api_key_auth(auth_config: dict, quiet: bool = False) -> dict:
     env_var = auth_config.get("env_var", "")
     if not env_var:
         if not quiet:
-            console.print("[red]API key auth requires 'env_var' in profile config.[/red]")
+            err_console.print("[red]API key auth requires 'env_var' in profile config.[/red]")
         raise typer.Exit(1)
     key = _require_env_var(env_var, "API key", quiet=quiet)
     header = auth_config.get("header", "X-API-Key")
@@ -1309,7 +1309,7 @@ def _basic_auth(auth_config: dict, quiet: bool = False) -> dict:
     pass_var = auth_config.get("password_env_var", "")
     if not user_var or not pass_var:
         if not quiet:
-            console.print("[red]Basic auth requires 'username_env_var' and 'password_env_var' in profile.[/red]")
+            err_console.print("[red]Basic auth requires 'username_env_var' and 'password_env_var' in profile.[/red]")
         raise typer.Exit(1)
     username = _require_env_var(user_var, "username", quiet=quiet)
     password = _require_env_var(pass_var, "password", quiet=quiet)
@@ -1506,7 +1506,7 @@ def stream_sse(response: httpx.Response) -> str:
                 elif "error" in data:
                     if content_buffer:
                         print()
-                    console.print(f"[red]Error: {data['error']}[/red]")
+                    err_console.print(f"[red]Error: {data['error']}[/red]")
                     return content_buffer
 
                 # Handle status updates
@@ -1514,7 +1514,7 @@ def stream_sse(response: httpx.Response) -> str:
                     status = data.get("status", "")
                     tool_name = data.get("tool_name", "")
                     if tool_name:
-                        console.print(f"[yellow][{status}] {tool_name}[/yellow]")
+                        err_console.print(f"[yellow][{status}] {tool_name}[/yellow]")
                     elif status not in ("running", "complete"):
                         err_console.print(f"[dim]{status}[/dim]")
 
@@ -1563,7 +1563,7 @@ def cmd_endpoints(
     if not eps:
         console.print("[dim]No endpoints found.[/dim]")
         if search:
-            console.print("[yellow]Tip: Try a different search term or use --tag to filter by category.[/yellow]")
+            err_console.print("[yellow]Tip: Try a different search term or use --tag to filter by category.[/yellow]")
         return
 
     # Sort
@@ -1990,7 +1990,7 @@ def cmd_init(
     data = load_profiles()
     if name in data.get("profiles", {}):
         if not typer.confirm(f"Profile '{name}' already exists. Overwrite?"):
-            console.print("[yellow]Cancelled.[/yellow]")
+            err_console.print("[yellow]Cancelled.[/yellow]")
             raise typer.Exit(0)
 
     # Build profile
@@ -2031,7 +2031,7 @@ def cmd_init(
         if resolved_spec_path:
             profile["openapi_path"] = resolved_spec_path
         else:
-            console.print("[yellow]Could not auto-detect spec location.[/yellow]")
+            err_console.print("[yellow]Could not auto-detect spec location.[/yellow]")
             manual_path = typer.prompt("OpenAPI spec path", default="/openapi.json")
             profile["openapi_path"] = manual_path
 
@@ -2294,12 +2294,12 @@ def cmd_login(
         if password_file:
             pf = _resolve_file_path(password_file, purpose="password")
             if not pf.exists():
-                console.print(f"[red]Password file not found: {password_file}[/red]")
+                err_console.print(f"[red]Password file not found: {password_file}[/red]")
                 raise typer.Exit(1)
             resolved_password = pf.read_text().rstrip("\n\r")
         elif password_stdin:
             if sys.stdin.isatty():
-                console.print("[red]--password-stdin requires piped input.[/red]")
+                err_console.print("[red]--password-stdin requires piped input.[/red]")
                 raise typer.Exit(1)
             resolved_password = sys.stdin.read().rstrip("\n\r")
         elif password:
@@ -2342,7 +2342,7 @@ def cmd_login(
 
         token_data = resp.json()
         if "expires_in" in token_data:
-            token_data["expires_at"] = time.time() + token_data["expires_in"]
+            token_data["expires_at"] = time.time() + float(token_data["expires_in"])
         elif "expires_at" not in token_data:
             token_data["expires_at"] = time.time() + 86400  # 24h default
 
@@ -2355,7 +2355,7 @@ def cmd_login(
         _try_post_login_spec_fetch(profile)
 
     except httpx.HTTPError as e:
-        console.print(f"[red]Login failed: {e}[/red]")
+        err_console.print(f"[red]Login failed: {e}[/red]")
         raise typer.Exit(1)
 
 
@@ -2524,7 +2524,7 @@ def cmd_profile_use(
     """Set the active profile."""
     data = load_profiles()
     if name not in data.get("profiles", {}):
-        console.print(f"[red]Profile '{name}' not found.[/red]")
+        err_console.print(f"[red]Profile '{name}' not found.[/red]")
         raise typer.Exit(1)
     data["active_profile"] = name
     save_profiles(data)
