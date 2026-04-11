@@ -781,7 +781,7 @@ def _try_refresh_token(profile: dict, auth_config: dict, cached: dict) -> dict |
                     new_data["refresh_token"] = cached["refresh_token"]
                 _save_token(profile.get("_name", "default"), new_data)
                 return new_data
-    except (httpx.HTTPError, json.JSONDecodeError, OSError, KeyError):
+    except (httpx.HTTPError, json.JSONDecodeError, OSError, KeyError, ValueError, TypeError):
         pass
     return None
 
@@ -814,7 +814,7 @@ def _oidc_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
                         refreshed["refresh_token"] = cached["refresh_token"]
                     _save_token(profile_name, refreshed)
                     return {"Authorization": f"Bearer {refreshed['access_token']}"}
-        except (json.JSONDecodeError, OSError, KeyError):
+        except (json.JSONDecodeError, OSError, KeyError, ValueError, TypeError):
             pass
 
     if not quiet:
@@ -1060,7 +1060,10 @@ def _oidc_exchange_code(
             token_data = _token_exchange(token_data, auth_config, base_url, verify=verify)
 
         if "expires_in" in token_data:
-            token_data["expires_at"] = time.time() + float(token_data["expires_in"])
+            try:
+                token_data["expires_at"] = time.time() + float(token_data["expires_in"])
+            except (TypeError, ValueError):
+                token_data["expires_at"] = time.time() + 86400
         elif "expires_at" not in token_data:
             token_data["expires_at"] = time.time() + 86400
 
@@ -1233,7 +1236,10 @@ def _device_login(
         err_console.print(f"[red]Device authorization response missing required fields: {e}[/red]")
         raise typer.Exit(1)
     verification_uri_complete = device_data.get("verification_uri_complete")
-    expires_in = float(device_data.get("expires_in", 600))
+    try:
+        expires_in = float(device_data.get("expires_in", 600))
+    except (TypeError, ValueError):
+        expires_in = 600.0
     interval = device_data.get("interval", 5)
 
     # Step 2: Display instructions
@@ -2375,7 +2381,10 @@ def cmd_login(
 
         token_data = resp.json()
         if "expires_in" in token_data:
-            token_data["expires_at"] = time.time() + float(token_data["expires_in"])
+            try:
+                token_data["expires_at"] = time.time() + float(token_data["expires_in"])
+            except (TypeError, ValueError):
+                token_data["expires_at"] = time.time() + 86400
         elif "expires_at" not in token_data:
             token_data["expires_at"] = time.time() + 86400  # 24h default
 
