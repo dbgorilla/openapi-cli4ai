@@ -1872,20 +1872,28 @@ def cmd_run(
         except json.JSONDecodeError as e:
             err_console.print(f"[red]Invalid JSON in {input_file}: {e}[/red]")
             raise typer.Exit(1)
-        if not isinstance(raw_input, dict):
-            err_console.print("[red]Input must be a JSON object, not an array or scalar.[/red]")
+        if isinstance(raw_input, dict):
+            parsed_input = raw_input
+        elif isinstance(raw_input, list):
+            parsed_input = {}
+            json_body = raw_input
+        else:
+            err_console.print("[red]Input must be a JSON object or array, not a scalar.[/red]")
             raise typer.Exit(1)
-        parsed_input = raw_input
     elif input_data:
         try:
             raw_input = json.loads(input_data)
         except json.JSONDecodeError as e:
             err_console.print(f"[red]Invalid JSON input: {e}[/red]")
             raise typer.Exit(1)
-        if not isinstance(raw_input, dict):
-            err_console.print("[red]Input must be a JSON object, not an array or scalar.[/red]")
+        if isinstance(raw_input, dict):
+            parsed_input = raw_input
+        elif isinstance(raw_input, list):
+            parsed_input = {}
+            json_body = raw_input
+        else:
+            err_console.print("[red]Input must be a JSON object or array, not a scalar.[/red]")
             raise typer.Exit(1)
-        parsed_input = raw_input
 
     # Route inputs to the right places
     method = endpoint["method"]
@@ -1915,9 +1923,14 @@ def cmd_run(
     headers = dict(profile.get("headers", {}))
     headers.update(get_auth_headers(profile))
     # Merge header_params, appending Cookie values instead of overwriting
+    # Check case-insensitively since profiles may use "cookie" or "Cookie"
     for hk, hv in header_params.items():
-        if hk == "Cookie" and "Cookie" in headers:
-            headers["Cookie"] = f"{headers['Cookie']}; {hv}"
+        if hk.lower() == "cookie":
+            existing_key = next((k for k in headers if k.lower() == "cookie"), None)
+            if existing_key:
+                headers[existing_key] = f"{headers[existing_key]}; {hv}"
+            else:
+                headers[hk] = hv
         else:
             headers[hk] = hv
 
