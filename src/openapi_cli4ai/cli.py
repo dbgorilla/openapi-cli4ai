@@ -1732,6 +1732,8 @@ def cmd_call(
                         if raw or output_json_flag:
                             if isinstance(error_data, (dict, list)):
                                 print(json.dumps(error_data, indent=2))
+                            elif output_json_flag:
+                                print(json.dumps({"error": str(error_data)}, indent=2))
                             else:
                                 print(str(error_data))
                             err_console.print(f"[red]HTTP {response.status_code}[/red]")
@@ -1894,7 +1896,7 @@ def cmd_run(
     # Substitute path parameters (URL-encode values for safety)
     full_path = path_template
     for key, value in path_params.items():
-        full_path = full_path.replace(f"{{{key}}}", urllib.parse.quote(str(value), safe=""))
+        full_path = full_path.replace(f"{{{key}}}", urllib.parse.quote(str(value), safe=","))
 
     # Check for unresolved path params
     if "{" in full_path:
@@ -1940,6 +1942,8 @@ def cmd_run(
                         if raw or output_json_flag:
                             if isinstance(error_data, (dict, list)):
                                 print(json.dumps(error_data, indent=2))
+                            elif output_json_flag:
+                                print(json.dumps({"error": str(error_data)}, indent=2))
                             else:
                                 print(str(error_data))
                             err_console.print(f"[red]HTTP {response.status_code}[/red]")
