@@ -442,7 +442,7 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
         try:
             auth_headers = get_auth_headers(profile, quiet=True)
             headers.update(auth_headers)
-        except (typer.Exit, httpx.HTTPError, OSError, KeyError) as e:
+        except (typer.Exit, httpx.HTTPError, OSError, KeyError, TypeError, ValueError) as e:
             _verbose(f"Auth headers unavailable for spec fetch: {e}")
 
         with _make_client(verify=verify) as client:
@@ -2136,7 +2136,7 @@ def cmd_init(
                 border_style="green",
             )
         )
-    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, yaml.YAMLError, OSError, ValueError) as e:
+    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, yaml.YAMLError, OSError, ValueError, TypeError, AttributeError) as e:
         err_console.print(f"[yellow]Warning: Could not validate spec ({e}). Profile saved anyway.[/yellow]")
 
     # Save profile
@@ -2485,7 +2485,7 @@ def _try_post_login_spec_fetch(profile: dict) -> None:
         endpoints = extract_endpoint_summaries(spec)
         spec_title = spec.get("info", {}).get("title", "Unknown")
         console.print(f"[green]Fetched spec: {spec_title} ({len(endpoints)} endpoints)[/green]")
-    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, KeyError, OSError):
+    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, KeyError, OSError, TypeError, ValueError, AttributeError):
         pass
 
 
