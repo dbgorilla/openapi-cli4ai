@@ -311,12 +311,23 @@ def load_profiles() -> dict:
     try:
         data = tomllib.loads(CONFIG_FILE.read_text())
         if not isinstance(data, dict):
-            return {"active_profile": None, "profiles": {}}
-        if "profiles" not in data:
-            data["profiles"] = {}
+            err_console.print(f"[red]Error: Config file has unexpected structure ({CONFIG_FILE})[/red]")
+            err_console.print("[dim]Expected a TOML table with [profiles]. Fix or delete the file.[/dim]")
+            raise typer.Exit(1)
+        profiles = data.get("profiles", {})
+        if not isinstance(profiles, dict):
+            err_console.print(f"[red]Error: 'profiles' in config is not a table ({CONFIG_FILE})[/red]")
+            err_console.print("[dim]Expected [profiles.name] sections. Fix or delete the file.[/dim]")
+            raise typer.Exit(1)
+        data["profiles"] = profiles
         return data
-    except (tomllib.TOMLDecodeError, OSError):
-        return {"active_profile": None, "profiles": {}}
+    except tomllib.TOMLDecodeError as e:
+        err_console.print(f"[red]Error: Config file is corrupt ({CONFIG_FILE}): {e}[/red]")
+        err_console.print("[dim]Fix the file manually or delete it to start fresh.[/dim]")
+        raise typer.Exit(1)
+    except OSError as e:
+        err_console.print(f"[red]Error: Cannot read config file ({CONFIG_FILE}): {e}[/red]")
+        raise typer.Exit(1)
 
 
 def save_profiles(data: dict) -> None:
@@ -324,14 +335,18 @@ def save_profiles(data: dict) -> None:
     ensure_dirs()
     # TOML doesn't support None values — filter them out before writing
     clean = {k: v for k, v in data.items() if v is not None}
-    CONFIG_FILE.write_text(tomli_w.dumps(clean))
+    _atomic_write(CONFIG_FILE, tomli_w.dumps(clean), restricted=True)
 
 
-def _resolve_env_vars(obj):
+def _resolve_env_vars(obj: Any) -> Any:
     """Recursively replace {env:VAR_NAME} placeholders with environment values."""
     if isinstance(obj, str):
         for match in re.finditer(r"\{env:([^}]+)\}", obj):
-            env_val = os.environ.get(match.group(1), "")
+            env_name = match.group(1)
+            env_val = os.environ.get(env_name)
+            if env_val is None:
+                _verbose(f"Environment variable {env_name} is not set (referenced as {{env:{env_name}}})")
+                env_val = ""
             obj = obj.replace(match.group(0), env_val)
         return obj
     elif isinstance(obj, dict):
@@ -351,17 +366,28 @@ def get_active_profile() -> tuple[str, dict]:
     profiles = data.get("profiles", {})
 
     if not profiles:
-        console.print("[red]No profiles configured. Run 'openapi-cli4ai init' to set one up.[/red]")
+        err_console.print("[red]No profiles configured. Run 'openapi-cli4ai init' to set one up.[/red]")
         raise typer.Exit(1)
 
     # Check env var override
-    name = os.environ.get(f"{ENV_PREFIX}PROFILE") or data.get("active_profile")
+    env_profile = os.environ.get(f"{ENV_PREFIX}PROFILE")
+    name = env_profile or data.get("active_profile")
 
-    if not name or name not in profiles:
-        # Fall back to first profile
+    if name and name not in profiles:
+        err_console.print(
+            f"[red]Profile '{name}' not found{' (from OAC_PROFILE env var)' if env_profile else ''}.[/red]"
+        )
+        available = ", ".join(profiles.keys())
+        err_console.print(f"[dim]Available profiles: {available}[/dim]")
+        raise typer.Exit(1)
+    elif not name:
         name = next(iter(profiles))
 
     profile = _resolve_env_vars(profiles[name])
+    if not isinstance(profile, dict):
+        err_console.print(f"[red]Error: Profile '{name}' is not a valid table in config.[/red]")
+        err_console.print("[dim]Expected [profiles.name] with base_url, auth, etc.[/dim]")
+        raise typer.Exit(1)
     profile["_name"] = name  # Inject name for internal use
     return name, profile
 
@@ -391,10 +417,14 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
     if not refresh and cache_meta.exists() and cache_file.exists():
         try:
             meta = json.loads(cache_meta.read_text())
+            if not isinstance(meta, dict):
+                raise ValueError("cache meta is not a JSON object")
             age = time.time() - meta.get("fetched_at", 0)
             if age < CACHE_TTL:
-                return json.loads(cache_file.read_text())
-        except (json.JSONDecodeError, OSError, KeyError):
+                cached_spec = json.loads(cache_file.read_text())
+                if isinstance(cached_spec, dict):
+                    return cached_spec
+        except (json.JSONDecodeError, OSError, KeyError, ValueError, TypeError):
             pass
 
     # Fetch fresh spec
@@ -405,10 +435,10 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
         try:
             auth_headers = get_auth_headers(profile, quiet=True)
             headers.update(auth_headers)
-        except (typer.Exit, Exception):
-            pass  # Auth not required for spec fetching
+        except (typer.Exit, httpx.HTTPError, OSError, KeyError) as e:
+            _verbose(f"Auth headers unavailable for spec fetch: {e}")
 
-        with httpx.Client(verify=verify, follow_redirects=True, timeout=30.0) as client:
+        with _make_client(verify=verify) as client:
             resp = client.get(spec_url, headers=headers)
             resp.raise_for_status()
 
@@ -425,17 +455,17 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
         else:
             spec = resp.json()
 
-        # Write cache
+        # Write cache atomically to prevent partial writes
         ensure_dirs()
-        cache_file.write_text(json.dumps(spec))
-        cache_meta.write_text(json.dumps({"fetched_at": time.time(), "url": spec_url}))
+        _atomic_write(cache_file, json.dumps(spec))
+        _atomic_write(cache_meta, json.dumps({"fetched_at": time.time(), "url": spec_url}))
 
         return spec
 
-    except Exception as e:
-        # Fallback to stale cache
+    except (httpx.HTTPError, json.JSONDecodeError, yaml.YAMLError, ValueError, OSError) as e:
+        # Fallback to stale cache on network, parse, or I/O errors
         if cache_file.exists():
-            console.print(f"[yellow]Warning: Using stale cached spec ({e})[/yellow]")
+            err_console.print(f"[yellow]Warning: Using stale cached spec ({e})[/yellow]")
             try:
                 return json.loads(cache_file.read_text())
             except (json.JSONDecodeError, OSError):
@@ -499,8 +529,14 @@ def _merge_allof(schemas: list[dict]) -> dict:
     return merged
 
 
-def resolve_refs(schema, spec_root: dict, max_depth: int = 10):
-    """Recursively resolve $ref pointers in an OpenAPI schema."""
+def resolve_refs(schema: Any, spec_root: dict, max_depth: int = 10) -> Any:
+    """Recursively resolve $ref pointers and composition keywords in an OpenAPI schema.
+
+    Handles:
+      - $ref: follows JSON pointer and resolves the referenced schema
+      - allOf: merges all sub-schemas into a single object (combined properties)
+      - oneOf/anyOf: resolves each variant and presents as a list
+    """
     if max_depth <= 0:
         return schema
     if isinstance(schema, dict):
@@ -515,7 +551,38 @@ def resolve_refs(schema, spec_root: dict, max_depth: int = 10):
                     resolved = resolved.get(part, {})
                 else:
                     return schema
-            return resolve_refs(resolved, spec_root, max_depth - 1)
+            resolved_schema = resolve_refs(resolved, spec_root, max_depth - 1)
+            # Preserve sibling keys alongside $ref (e.g., description, nullable)
+            siblings = {k: v for k, v in schema.items() if k != "$ref"}
+            if siblings and isinstance(resolved_schema, dict):
+                merged = dict(resolved_schema)
+                for k, v in siblings.items():
+                    if k not in merged:
+                        merged[k] = v
+                return merged
+            return resolved_schema
+
+        # allOf: merge all sub-schemas into one
+        if "allOf" in schema:
+            resolved_schemas = [resolve_refs(s, spec_root, max_depth - 1) for s in schema["allOf"]]
+            merged = _merge_allof(resolved_schemas)
+            # Preserve any sibling keys (description, etc.) from the parent
+            for k, v in schema.items():
+                if k != "allOf" and k not in merged:
+                    merged[k] = resolve_refs(v, spec_root, max_depth - 1)
+            return merged
+
+        # oneOf / anyOf: resolve each variant, present as list
+        for keyword in ("oneOf", "anyOf"):
+            if keyword in schema:
+                resolved_variants = [resolve_refs(s, spec_root, max_depth - 1) for s in schema[keyword]]
+                result = {keyword: resolved_variants}
+                # Preserve sibling keys (discriminator, description, etc.)
+                for k, v in schema.items():
+                    if k != keyword:
+                        result[k] = resolve_refs(v, spec_root, max_depth - 1)
+                return result
+
         return {k: resolve_refs(v, spec_root, max_depth - 1) for k, v in schema.items()}
     elif isinstance(schema, list):
         return [resolve_refs(item, spec_root, max_depth - 1) for item in schema]
@@ -533,13 +600,28 @@ def extract_full_endpoint_schema(spec: dict, operation_id: str) -> dict | None:
             op_id = operation.get("operationId", f"{method}_{path}")
             if op_id == operation_id:
                 resolved = resolve_refs(operation, spec)
+                # Merge path-level parameters with operation-level parameters.
+                # Operation-level params override path-level params with the same name+in.
+                path_params = resolve_refs(methods.get("parameters", []), spec)
+                op_params = resolved.get("parameters", [])
+                # Build a lookup of operation params by (name, in) for dedup
+                op_param_keys = set()
+                for p in op_params:
+                    if isinstance(p, dict) and "name" in p:
+                        op_param_keys.add((p["name"], p.get("in", "")))
+                # Include path params not overridden by operation params
+                merged_params = list(op_params)
+                for p in path_params:
+                    if isinstance(p, dict) and "name" in p:
+                        if (p["name"], p.get("in", "")) not in op_param_keys:
+                            merged_params.append(p)
                 return {
                     "method": method.upper(),
                     "path": path,
                     "operationId": operation_id,
                     "summary": operation.get("summary", ""),
                     "description": operation.get("description", ""),
-                    "parameters": resolved.get("parameters", []),
+                    "parameters": merged_params,
                     "requestBody": resolved.get("requestBody"),
                     "responses": _summarize_responses(resolved.get("responses", {})),
                 }
