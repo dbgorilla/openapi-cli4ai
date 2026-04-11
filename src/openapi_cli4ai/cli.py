@@ -560,12 +560,17 @@ def resolve_refs(schema: Any, spec_root: dict, max_depth: int = 10) -> Any:
                     return schema
             resolved_schema = resolve_refs(resolved, spec_root, max_depth - 1)
             # Preserve sibling keys alongside $ref (e.g., description, nullable)
-            # Local siblings override component values per OpenAPI 3.1 spec
-            # Resolve sibling values in case they contain nested $refs
+            # Local siblings override scalars but merge object keywords (properties, required)
             siblings = {k: resolve_refs(v, spec_root, max_depth - 1) for k, v in schema.items() if k != "$ref"}
             if siblings and isinstance(resolved_schema, dict):
                 merged = dict(resolved_schema)
-                merged.update(siblings)
+                for k, v in siblings.items():
+                    if k == "properties" and isinstance(v, dict) and isinstance(merged.get("properties"), dict):
+                        merged["properties"] = {**merged["properties"], **v}
+                    elif k == "required" and isinstance(v, list) and isinstance(merged.get("required"), list):
+                        merged["required"] = sorted(set(merged["required"] + v))
+                    else:
+                        merged[k] = v
                 return merged
             return resolved_schema
 
@@ -573,10 +578,17 @@ def resolve_refs(schema: Any, spec_root: dict, max_depth: int = 10) -> Any:
         if "allOf" in schema:
             resolved_schemas = [resolve_refs(s, spec_root, max_depth - 1) for s in schema["allOf"]]
             merged = _merge_allof(resolved_schemas)
-            # Parent wrapper metadata overrides child values (e.g., description on allOf wrapper)
+            # Parent wrapper metadata: merge properties/required, override scalars
             for k, v in schema.items():
-                if k != "allOf":
-                    merged[k] = resolve_refs(v, spec_root, max_depth - 1)
+                if k == "allOf":
+                    continue
+                resolved_v = resolve_refs(v, spec_root, max_depth - 1)
+                if k == "properties" and isinstance(resolved_v, dict) and isinstance(merged.get("properties"), dict):
+                    merged["properties"] = {**merged["properties"], **resolved_v}
+                elif k == "required" and isinstance(resolved_v, list) and isinstance(merged.get("required"), list):
+                    merged["required"] = sorted(set(merged["required"] + resolved_v))
+                else:
+                    merged[k] = resolved_v
             return merged
 
         # oneOf / anyOf: resolve each variant, present as list
@@ -1892,7 +1904,12 @@ def cmd_run(
     verify = profile.get("verify_ssl", True) and get_verify_ssl()
     headers = dict(profile.get("headers", {}))
     headers.update(get_auth_headers(profile))
-    headers.update(header_params)
+    # Merge header_params, appending Cookie values instead of overwriting
+    for hk, hv in header_params.items():
+        if hk == "Cookie" and "Cookie" in headers:
+            headers["Cookie"] = f"{headers['Cookie']}; {hv}"
+        else:
+            headers[hk] = hv
 
     _verbose(f"Headers: {_redact_headers(headers)}")
 
