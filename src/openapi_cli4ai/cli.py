@@ -1074,21 +1074,30 @@ def _token_exchange(
     if not exchange_endpoint:
         return token_data
 
-    body_template = auth_config.get(
-        "token_exchange_body",
-        '{"access_token": "{access_token}"}',
-    )
-    body_str = body_template.replace("{access_token}", token_data.get("access_token", "")).replace(
-        "{refresh_token}", token_data.get("refresh_token", "")
-    )
+    # Build exchange body safely via dict to prevent JSON injection from token values
+    body_template = auth_config.get("token_exchange_body")
+    if body_template:
+        # Custom template: replace placeholders then parse to validate JSON structure
+        body_str = body_template.replace("{access_token}", token_data.get("access_token", "")).replace(
+            "{refresh_token}", token_data.get("refresh_token", "")
+        )
+        try:
+            exchange_body = json.loads(body_str)
+        except json.JSONDecodeError:
+            err_console.print("[red]Token exchange body template produced invalid JSON[/red]")
+            raise typer.Exit(1)
+    else:
+        # Default: safe dict construction (no string interpolation)
+        exchange_body = {"access_token": token_data.get("access_token", "")}
+        if token_data.get("refresh_token"):
+            exchange_body["refresh_token"] = token_data["refresh_token"]
 
     exchange_url = f"{base_url.rstrip('/')}{exchange_endpoint}"
     try:
         with _make_client(verify=verify) as client:
             resp = client.post(
                 exchange_url,
-                content=body_str,
-                headers={"Content-Type": "application/json"},
+                json=exchange_body,
             )
         if resp.status_code != 200:
             err_console.print(f"[red]Token exchange failed ({resp.status_code}):[/red]")
@@ -1197,10 +1206,14 @@ def _device_login(
         err_console.print(f"[red]Device authorization failed: {e}[/red]")
         raise typer.Exit(1)
 
-    device_data = resp.json()
-    device_code = device_data["device_code"]
-    user_code = device_data["user_code"]
-    verification_uri = device_data["verification_uri"]
+    try:
+        device_data = resp.json()
+        device_code = device_data["device_code"]
+        user_code = device_data["user_code"]
+        verification_uri = device_data["verification_uri"]
+    except (json.JSONDecodeError, KeyError) as e:
+        err_console.print(f"[red]Device authorization response missing required fields: {e}[/red]")
+        raise typer.Exit(1)
     verification_uri_complete = device_data.get("verification_uri_complete")
     expires_in = device_data.get("expires_in", 600)
     interval = device_data.get("interval", 5)

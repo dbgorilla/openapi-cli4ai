@@ -102,10 +102,9 @@ class TestTimeoutFlag:
         old = cli_mod._timeout_seconds
         cli_mod._timeout_seconds = 42.0
         try:
-            client = cli_mod._make_client(verify=False)
-            # Verify timeout was passed to the client (httpx stores it as a Timeout object)
-            assert client.timeout.connect == 42.0
-            client.close()
+            with cli_mod._make_client(verify=False) as client:
+                # Verify timeout was passed to the client (httpx stores it as a Timeout object)
+                assert client.timeout.connect == 42.0
         finally:
             cli_mod._timeout_seconds = old
 
