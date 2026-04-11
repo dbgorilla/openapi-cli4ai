@@ -589,7 +589,7 @@ class TestTryPostLoginSpecFetch:
     def test_failure_suppressed(self, cli_module, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
         profile = {"_name": "test", "base_url": "https://api.example.com", "auth": {"type": "none"}}
-        with patch.object(mod, "fetch_spec", side_effect=Exception("fail")):
+        with patch.object(mod, "fetch_spec", side_effect=httpx.HTTPError("fail")):
             mod._try_post_login_spec_fetch(profile)  # Should not raise
 
 
@@ -632,10 +632,11 @@ class TestStreamSseStatusNoTool:
 
 
 class TestRouteInputsEdgeCases:
-    def test_cookie_param_treated_as_query(self, cli_module):
+    def test_cookie_param_routed_to_cookie_header(self, cli_module):
         params = [{"name": "session", "in": "cookie"}]
         path_p, query_p, header_p, body = cli_module._route_inputs({"session": "abc"}, params, False)
-        assert query_p == {"session": "abc"}
+        assert header_p["Cookie"] == "session=abc"
+        assert query_p == {}
 
     def test_all_input_becomes_body_when_request_body_no_params(self, cli_module):
         path_p, query_p, header_p, body = cli_module._route_inputs({"name": "Rex", "status": "available"}, [], True)

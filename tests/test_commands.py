@@ -233,8 +233,8 @@ class TestCmdCall:
         assert result.exit_code == 0
         mock_client.request.assert_called_once()
         call_args = mock_client.request.call_args
-        assert call_args[0][0] == "GET"
-        assert "api.example.com/pet/1" in call_args[0][1]
+        assert call_args.kwargs["method"] == "GET"
+        assert "api.example.com/pet/1" in call_args.kwargs["url"]
 
     def test_post_with_body_string(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
@@ -460,7 +460,7 @@ class TestCmdRun:
         assert result.exit_code == 0
         call_args = mock_client.request.call_args
         # petId should be in the URL path
-        assert "/pet/1" in call_args[0][1]
+        assert "/pet/1" in call_args.kwargs["url"]
 
     def test_run_with_input_file(self, tmp_config, petstore_spec):
         mod, tmp_path, cache_dir = tmp_config
@@ -941,10 +941,12 @@ class TestCmdInit:
 
     def test_init_spec_fetch_failure_still_saves(self, tmp_config):
         """If spec fetch fails, profile should still be saved with a warning."""
+        import httpx as httpx_mod
+
         mod, tmp_path, cache_dir = tmp_config
         _write_config(mod.CONFIG_FILE, {"profiles": {}})
 
-        with patch.object(mod, "fetch_spec", side_effect=Exception("Connection refused")):
+        with patch.object(mod, "fetch_spec", side_effect=httpx_mod.HTTPError("Connection refused")):
             result = runner.invoke(
                 app,
                 [
@@ -1156,6 +1158,8 @@ class TestProfileCommands:
 
     def test_profile_remove_cleans_cache(self, tmp_config):
         """Removing a profile should clean up its cached spec and token files."""
+        import hashlib
+
         mod, tmp_path, cache_dir = tmp_config
         config = {
             "active_profile": "test",
@@ -1169,16 +1173,25 @@ class TestProfileCommands:
         }
         _write_config(mod.CONFIG_FILE, config)
 
-        # Create cache files for this profile
-        (cache_dir / "test_token.json").write_text("{}")
-        (cache_dir / "test_spec.json").write_text("{}")
+        # Create cache files matching the production naming scheme:
+        # Token: {_safe_profile_name(name)}_token.json
+        # Spec:  spec_{url_hash}.json / spec_{url_hash}.meta
+        spec_url = "https://api.example.com/openapi.json"
+        url_hash = hashlib.sha256(spec_url.encode()).hexdigest()[:12]
+        token_file = cache_dir / "test_token.json"
+        spec_file = cache_dir / f"spec_{url_hash}.json"
+        spec_meta = cache_dir / f"spec_{url_hash}.meta"
+        token_file.write_text("{}")
+        spec_file.write_text("{}")
+        spec_meta.write_text("{}")
 
         result = runner.invoke(app, ["profile", "remove", "test", "--force"])
         assert result.exit_code == 0
 
         # Cache files should be cleaned up
-        assert not (cache_dir / "test_token.json").exists()
-        assert not (cache_dir / "test_spec.json").exists()
+        assert not token_file.exists()
+        assert not spec_file.exists()
+        assert not spec_meta.exists()
 
 
 # ===========================================================================
@@ -1253,7 +1266,7 @@ class TestEdgeCases:
 
         assert result.exit_code == 0
         call_args = mock_client.request.call_args
-        assert "/pet/1" in call_args[0][1]
+        assert "/pet/1" in call_args.kwargs["url"]
 
     def test_no_profiles_configured(self, tmp_config):
         """Commands should fail gracefully when no profiles exist."""

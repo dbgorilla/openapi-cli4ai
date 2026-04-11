@@ -330,12 +330,12 @@ def test_token_exchange_posts_to_endpoint(cli_module):
         result = cli_module._token_exchange(token_data, auth_config, "https://api.example.com")
 
     assert result["access_token"] == "local-token"
-    # Verify the POST was made with interpolated body
+    # Verify the POST was made with interpolated body as JSON dict
     call_kwargs = mock_client.post.call_args
     assert "/auth/token-exchange" in call_kwargs[0][0]
-    body = call_kwargs[1]["content"]
-    assert "idp-token" in body
-    assert "idp-refresh" in body
+    body = call_kwargs[1]["json"]
+    assert body["access_token"] == "idp-token"
+    assert body["refresh_token"] == "idp-refresh"
 
 
 def test_token_exchange_default_body(cli_module):
@@ -355,9 +355,8 @@ def test_token_exchange_default_body(cli_module):
 
         cli_module._token_exchange(token_data, auth_config, "https://api.example.com")
 
-    body = mock_client.post.call_args[1]["content"]
-    parsed = json.loads(body)
-    assert parsed == {"access_token": "idp-token"}
+    body = mock_client.post.call_args[1]["json"]
+    assert body == {"access_token": "idp-token"}
 
 
 def test_token_exchange_failure_exits(cli_module):
