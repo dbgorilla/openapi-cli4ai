@@ -25,18 +25,21 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import html as html_module  # noqa: F401 (used by F3: OIDC callback HTML escaping)
 import json
 import os
+import random
 import re
 import secrets
 import sys
+import tempfile
 import time
 import tomllib
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional  # noqa: F401 (Any used by F2: resolve_refs/resolve_env_vars)
 
 from dotenv import load_dotenv
 
@@ -98,6 +101,11 @@ app.add_typer(profile_app, name="profile")
 
 # Global state
 _insecure_mode = False
+err_console = Console(stderr=True)
+
+_verbose_mode = False
+_timeout_seconds = 60.0
+_max_retries = 0
 
 
 def set_insecure_mode(insecure: bool) -> None:
@@ -109,10 +117,190 @@ def get_verify_ssl() -> bool:
     return not _insecure_mode
 
 
+def _redact_headers(headers: dict) -> dict:
+    """Return a copy of headers with sensitive values redacted for verbose output."""
+    sensitive_value_prefixes = ("bearer ", "basic ", "token ")
+    sensitive_exact_keys = {"authorization", "x-api-key", "api-key", "cookie", "set-cookie"}
+    # Also redact any header whose name contains these substrings (catches custom auth headers)
+    sensitive_key_patterns = ("key", "token", "secret", "password", "auth")
+    redacted = {}
+    for k, v in headers.items():
+        k_lower = k.lower()
+        v_str = str(v).lower()
+        if (
+            k_lower in sensitive_exact_keys
+            or any(p in k_lower for p in sensitive_key_patterns)
+            or any(v_str.startswith(p) for p in sensitive_value_prefixes)
+        ):
+            redacted[k] = "***REDACTED***"
+        else:
+            redacted[k] = v
+    return redacted
+
+
+def _verbose(msg: str) -> None:
+    """Print a verbose message to stderr if verbose mode is enabled."""
+    if _verbose_mode:
+        err_console.print(f"[dim]> {msg}[/dim]")
+
+
+def _make_client(verify: bool = True) -> httpx.Client:
+    """Create a configured httpx.Client with the global timeout.
+
+    Callers are responsible for retry logic when _max_retries > 0.
+    """
+    return httpx.Client(
+        verify=verify,
+        timeout=_timeout_seconds,
+        follow_redirects=True,
+    )
+
+
+def _request_with_retry(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    **kwargs,
+) -> httpx.Response:
+    """Make an HTTP request with optional retry on 429/503.
+
+    Respects Retry-After header. Uses exponential backoff with jitter.
+    Total retry time is capped at 600s (10 minutes) across all attempts.
+    Only retries idempotent methods (GET, HEAD, OPTIONS, PUT, DELETE) to
+    avoid duplicating side effects on POST/PATCH.
+    """
+    idempotent_methods = {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"}
+    can_retry = method.upper() in idempotent_methods
+    max_attempts = max(1, _max_retries + 1) if can_retry else 1
+    max_total_wait = 600.0  # 10 minute aggregate cap
+    last_response = None
+    total_waited = 0.0
+
+    for attempt in range(max_attempts):
+        _verbose(f"{method} {url}" + (f" (attempt {attempt + 1}/{max_attempts})" if attempt > 0 else ""))
+        response = client.request(method=method, url=url, **kwargs)
+        last_response = response
+
+        if response.status_code not in (429, 503) or attempt >= max_attempts - 1:
+            return response
+
+        # Determine wait time (capped at 300s per attempt to prevent server-controlled DoS)
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                wait = min(float(retry_after), 300.0)
+            except ValueError:
+                wait = 2**attempt
+        else:
+            wait = 2**attempt
+
+        # Add jitter (0-25% of wait time), cap per-attempt at 300s
+        wait = min(wait + random.uniform(0, wait * 0.25), 300.0)
+
+        # Enforce aggregate cap
+        if total_waited + wait > max_total_wait:
+            _verbose(f"Aggregate retry cap ({max_total_wait:.0f}s) reached, returning last response")
+            return response
+
+        _verbose(f"Got {response.status_code}, retrying in {wait:.1f}s...")
+        time.sleep(wait)
+        total_waited += wait
+
+    return last_response  # type: ignore[return-value]
+
+
 # ── Directory Helpers ──────────────────────────────────────────────────────────
 def ensure_dirs() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.chmod(0o700)
+
+
+def _resolve_file_path(file_path: str | Path, purpose: str = "file") -> Path:
+    """Resolve a user-supplied file path, following symlinks.
+
+    Warns if the resolved path is outside the current working directory.
+    Does NOT block access — this tool is for power users and AI agents
+    who may legitimately read files from anywhere.
+    """
+    resolved = Path(file_path).resolve()
+    try:
+        cwd = Path.cwd().resolve()
+        resolved.relative_to(cwd)
+    except ValueError:
+        err_console.print(f"[yellow]Warning: {purpose} path resolves outside working directory: {resolved}[/yellow]")
+    except OSError:
+        pass  # CWD may not exist in some edge cases
+    return resolved
+
+
+def _atomic_write(target: Path, content: str, restricted: bool = False) -> None:
+    """Write content to a file atomically using temp file + rename.
+
+    Prevents partial writes from corrupting files. If restricted=True,
+    sets 0o600 permissions (owner read/write only) for credential files.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    old_umask = os.umask(0o077) if restricted else None
+    try:
+        fd, temp_path = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(content)
+            os.replace(temp_path, target)
+        except BaseException:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
+    finally:
+        if old_umask is not None:
+            os.umask(old_umask)
+
+
+def _safe_profile_name(name: str) -> str:
+    """Sanitize a profile name for use in file paths.
+
+    Strips path separators and traversal sequences to prevent
+    writing files outside CACHE_DIR. Appends a short hash to
+    avoid collisions when different raw names sanitize to the
+    same basename (e.g., "a/b" and "c/b" both become "b").
+    """
+    # Remove any path components — only the basename matters
+    safe = Path(name).name
+    # Reject empty or dot-only names
+    if not safe or safe in (".", ".."):
+        safe = "default"
+    # If the name was sanitized (different from input), append a hash
+    # to avoid collisions between distinct names that share a basename
+    if safe != name:
+        name_hash = hashlib.sha256(name.encode()).hexdigest()[:8]
+        safe = f"{safe}_{name_hash}"
+    return safe
+
+
+def _save_token(profile_name: str, token_data: dict) -> Path:
+    """Cache an OAuth/OIDC token with restricted permissions.
+
+    Returns the path to the cached token file.
+    """
+    token_cache = CACHE_DIR / f"{_safe_profile_name(profile_name)}_token.json"
+    ensure_dirs()
+    _atomic_write(token_cache, json.dumps(token_data), restricted=True)
+    return token_cache
+
+
+def _require_env_var(env_var: str, label: str, quiet: bool = False) -> str:
+    """Get a required value from an environment variable.
+
+    Raises typer.Exit(1) with a helpful message if not set.
+    """
+    value = os.environ.get(env_var, "")
+    if not value:
+        if not quiet:
+            console.print(f"[red]Set the {env_var} environment variable with your {label}.[/red]")
+        raise typer.Exit(1)
+    return value
 
 
 # ── Profile Management ────────────────────────────────────────────────────────
@@ -285,6 +473,32 @@ def extract_endpoint_summaries(spec: dict) -> list[dict]:
 
 
 # ── $ref Resolution ────────────────────────────────────────────────────────────
+def _merge_allof(schemas: list[dict]) -> dict:
+    """Merge a list of schemas from an allOf into a single schema.
+
+    Combines all keys from sub-schemas. For 'properties' and 'required',
+    values are merged (combined). For other keys, later schemas win.
+    """
+    merged: dict = {}
+    required: list[str] = []
+    properties: dict = {}
+    for s in schemas:
+        if not isinstance(s, dict):
+            continue
+        for k, v in s.items():
+            if k == "properties":
+                properties.update(v)
+            elif k == "required":
+                required.extend(v)
+            else:
+                merged[k] = v  # Later schemas win for all non-merge keys
+    if properties:
+        merged["properties"] = properties
+    if required:
+        merged["required"] = sorted(set(required))
+    return merged
+
+
 def resolve_refs(schema, spec_root: dict, max_depth: int = 10):
     """Recursively resolve $ref pointers in an OpenAPI schema."""
     if max_depth <= 0:
@@ -1057,6 +1271,20 @@ def make_request(
             params=params,
             headers=headers,
         )
+
+
+def _safe_json_or_text(response: httpx.Response) -> dict | list | str:
+    """Try to parse response as JSON, fall back to text if it fails.
+
+    Servers sometimes claim application/json content-type but return
+    HTML error pages or malformed bodies.
+    """
+    if "json" in response.headers.get("content-type", ""):
+        try:
+            return response.json()
+        except json.JSONDecodeError:
+            pass
+    return response.text
 
 
 def handle_response(response: httpx.Response, raw: bool = False, json_output: bool = False) -> None:
