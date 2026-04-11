@@ -1862,6 +1862,7 @@ def cmd_run(
 
     # Parse input
     parsed_input: dict = {}
+    json_body = None  # Set directly for array inputs, otherwise set by _route_inputs
     if input_file:
         fp = _resolve_file_path(input_file, purpose="input")
         if not fp.exists():
@@ -1901,7 +1902,11 @@ def cmd_run(
     parameters = endpoint.get("parameters", [])
     has_request_body = endpoint.get("requestBody") is not None
 
-    path_params, query_params, header_params, json_body = _route_inputs(parsed_input, parameters, has_request_body)
+    # If json_body was already set (array input), skip parameter routing
+    if json_body is not None:
+        path_params, query_params, header_params = {}, {}, {}
+    else:
+        path_params, query_params, header_params, json_body = _route_inputs(parsed_input, parameters, has_request_body)
 
     # Substitute path parameters (URL-encode values for safety)
     full_path = path_template
