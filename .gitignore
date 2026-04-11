@@ -41,3 +41,7 @@ profiles.yaml
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Project-specific
+CLAUDE.md
+graphify-out/
