@@ -64,7 +64,7 @@ def test_stream_sse_error_event(cli_module, capsys):
     result = cli_module.stream_sse(response)
     assert result == "partial"
     captured = capsys.readouterr()
-    assert "something went wrong" in captured.out
+    assert "something went wrong" in captured.err
 
 
 def test_stream_sse_status_event(cli_module, capsys):
@@ -79,7 +79,7 @@ def test_stream_sse_status_event(cli_module, capsys):
     result = cli_module.stream_sse(response)
     assert result == "result"
     captured = capsys.readouterr()
-    assert "search_db" in captured.out
+    assert "search_db" in captured.err
 
 
 def test_stream_sse_empty_lines(cli_module):

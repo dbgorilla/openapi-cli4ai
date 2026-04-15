@@ -6,6 +6,8 @@ import json
 import time
 from unittest.mock import patch, MagicMock
 
+import httpx
+
 
 def test_spec_cache_paths(cli_module):
     """Should generate deterministic cache paths from URL."""
@@ -95,9 +97,11 @@ def test_fetch_spec_stale_cache_triggers_fetch(tmp_config, petstore_spec):
     cache_file.write_text(json.dumps(petstore_spec))
     meta_file.write_text(json.dumps({"fetched_at": time.time() - 7200, "url": url}))  # 2 hours old
 
-    # Mock httpx to fail — should fall back to stale cache
-    with patch("openapi_cli4ai.cli.httpx.Client") as mock_client:
-        mock_client.return_value.__enter__ = MagicMock(side_effect=Exception("Network error"))
-        mock_client.return_value.__exit__ = MagicMock(return_value=False)
+    # Mock _make_client to fail — should fall back to stale cache
+    with patch("openapi_cli4ai.cli._make_client") as mock_make_client:
+        mock_ctx = MagicMock()
+        mock_ctx.__enter__ = MagicMock(side_effect=httpx.ConnectError("Network error"))
+        mock_ctx.__exit__ = MagicMock(return_value=False)
+        mock_make_client.return_value = mock_ctx
         result = mod.fetch_spec(profile)
         assert result["info"]["title"] == petstore_spec["info"]["title"]

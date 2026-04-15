@@ -10,10 +10,6 @@ import pytest
 from openapi_cli4ai import cli as cli_mod
 
 
-def pytest_configure(config):
-    config.addinivalue_line("markers", "integration: live API tests (may be slow)")
-
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
