@@ -906,11 +906,13 @@ def _oidc_login(
     no_browser: bool = False,
     verify: bool = True,
     base_url: str = "",
+    force_login: bool = False,
 ) -> None:
     """Run OIDC Authorization Code + PKCE flow.
 
     With browser (default): opens browser, listens on localhost for callback.
     Without browser (--no-browser): prints URL, user pastes redirect URL back.
+    With force_login: adds prompt=login to bypass cached IdP session.
     """
     authorize_url = auth_config.get("authorize_url", "")
     token_url = auth_config.get("token_url", "")
@@ -930,17 +932,18 @@ def _oidc_login(
     state = secrets.token_urlsafe(32)
 
     # Build authorization URL
-    auth_params = urllib.parse.urlencode(
-        {
-            "response_type": "code",
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "scope": scopes,
-            "state": state,
-            "code_challenge": code_challenge,
-            "code_challenge_method": "S256",
-        }
-    )
+    params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": scopes,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    }
+    if force_login:
+        params["prompt"] = "login"
+    auth_params = urllib.parse.urlencode(params)
     full_auth_url = f"{authorize_url}?{auth_params}"
 
     if no_browser:
@@ -2066,6 +2069,31 @@ def cmd_init(
     token_exchange_endpoint: Annotated[
         Optional[str], typer.Option("--token-exchange-endpoint", help="Token exchange endpoint path for two-phase auth")
     ] = None,
+    redirect_uri: Annotated[Optional[str], typer.Option("--redirect-uri", help="OIDC redirect URI")] = None,
+    callback_port: Annotated[
+        Optional[int], typer.Option("--callback-port", help="Local callback port for OIDC")
+    ] = None,
+    token_env_var: Annotated[
+        Optional[str],
+        typer.Option("--token-env-var", help="Env var for static bearer token (skips interactive prompt)"),
+    ] = None,
+    token_endpoint: Annotated[
+        Optional[str],
+        typer.Option("--token-endpoint", help="Token endpoint path for bearer login (skips interactive prompt)"),
+    ] = None,
+    refresh_endpoint: Annotated[
+        Optional[str], typer.Option("--refresh-endpoint", help="Refresh endpoint path for bearer login")
+    ] = None,
+    api_key_env_var: Annotated[
+        Optional[str], typer.Option("--api-key-env-var", help="Env var for API key (skips interactive prompt)")
+    ] = None,
+    api_key_header: Annotated[Optional[str], typer.Option("--api-key-header", help="Header name for API key")] = None,
+    api_key_prefix: Annotated[
+        Optional[str], typer.Option("--api-key-prefix", help="Header value prefix for API key")
+    ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip confirmation prompts (for non-interactive use)")
+    ] = False,
 ) -> None:
     """Initialize a new API profile with guided setup.
 
@@ -2100,7 +2128,7 @@ def cmd_init(
     # Check if profile already exists
     data = load_profiles()
     if name in data.get("profiles", {}):
-        if not typer.confirm(f"Profile '{name}' already exists. Overwrite?"):
+        if not yes and not typer.confirm(f"Profile '{name}' already exists. Overwrite?"):
             err_console.print("[yellow]Cancelled.[/yellow]")
             raise typer.Exit(0)
 
@@ -2149,26 +2177,47 @@ def cmd_init(
 
     # Auth setup
     if auth_type == "bearer":
-        bearer_mode = typer.prompt("Static token or login endpoint?", type=str, default="login")
-        if bearer_mode.lower().startswith("s"):
-            # Static token from env var
-            env_var = typer.prompt("Environment variable for token", default=f"{name.upper()}_TOKEN")
-            profile["auth"]["token_env_var"] = env_var
-            err_console.print(f"[dim]Set {env_var} in your environment or add it to a .env file.[/dim]")
-        else:
-            # Token endpoint (username/password login)
-            token_ep = typer.prompt("Token endpoint path", default="/api/auth/token")
-            profile["auth"]["token_endpoint"] = token_ep
-            refresh_ep = typer.prompt("Refresh endpoint path (leave blank to skip)", default="")
-            if refresh_ep:
-                profile["auth"]["refresh_endpoint"] = refresh_ep
+        if token_env_var:
+            profile["auth"]["token_env_var"] = token_env_var
+            err_console.print(f"[dim]Set {token_env_var} in your environment or add it to a .env file.[/dim]")
+        elif token_endpoint:
+            profile["auth"]["token_endpoint"] = token_endpoint
+            if refresh_endpoint:
+                profile["auth"]["refresh_endpoint"] = refresh_endpoint
             profile["auth"]["payload"] = {
                 "username": "{username}",
                 "password": "{password}",
             }
             console.print("[dim]Run 'openapi-cli4ai login --username <user>' to authenticate.[/dim]")
+        else:
+            bearer_mode = typer.prompt("Static token or login endpoint?", type=str, default="login")
+            if bearer_mode.lower().startswith("s"):
+                env_var = typer.prompt("Environment variable for token", default=f"{name.upper()}_TOKEN")
+                profile["auth"]["token_env_var"] = env_var
+                err_console.print(f"[dim]Set {env_var} in your environment or add it to a .env file.[/dim]")
+            else:
+                token_ep = typer.prompt("Token endpoint path", default="/api/auth/token")
+                profile["auth"]["token_endpoint"] = token_ep
+                refresh_ep = typer.prompt("Refresh endpoint path (leave blank to skip)", default="")
+                if refresh_ep:
+                    profile["auth"]["refresh_endpoint"] = refresh_ep
+                profile["auth"]["payload"] = {
+                    "username": "{username}",
+                    "password": "{password}",
+                }
+                console.print("[dim]Run 'openapi-cli4ai login --username <user>' to authenticate.[/dim]")
     elif auth_type == "oidc":
-        _init_oidc_auth(profile, authorize_url, token_url, client_id, scopes, issuer_url, token_exchange_endpoint)
+        _init_oidc_auth(
+            profile,
+            authorize_url,
+            token_url,
+            client_id,
+            scopes,
+            issuer_url,
+            token_exchange_endpoint,
+            redirect_uri,
+            callback_port,
+        )
         console.print("[dim]Run 'openapi-cli4ai login' to authenticate via browser.[/dim]")
     elif auth_type == "device":
         _init_device_auth(profile, device_config_url, issuer_url, client_id, scopes, token_exchange_endpoint)
@@ -2177,9 +2226,11 @@ def cmd_init(
         _init_auto_auth(profile, issuer_url, client_id, scopes, token_exchange_endpoint)
         console.print("[dim]Run 'openapi-cli4ai login' to authenticate (flow auto-detected).[/dim]")
     elif auth_type == "api-key":
-        env_var = typer.prompt("Environment variable for API key", default=f"{name.upper()}_API_KEY")
-        header_name = typer.prompt("Header name", default="Authorization")
-        prefix = typer.prompt("Header value prefix", default="Bearer ")
+        env_var = api_key_env_var or typer.prompt("Environment variable for API key", default=f"{name.upper()}_API_KEY")
+        header_name = api_key_header or typer.prompt("Header name", default="Authorization")
+        prefix = (
+            api_key_prefix if api_key_prefix is not None else typer.prompt("Header value prefix", default="Bearer ")
+        )
         profile["auth"]["env_var"] = env_var
         profile["auth"]["header"] = header_name
         profile["auth"]["prefix"] = prefix
@@ -2243,6 +2294,8 @@ def _init_oidc_auth(
     scopes: str | None,
     issuer_url: str | None,
     token_exchange_endpoint: str | None,
+    redirect_uri: str | None = None,
+    callback_port: int | None = None,
 ) -> None:
     """Set up OIDC auth config in profile, prompting only for missing values."""
     if issuer_url:
@@ -2255,12 +2308,17 @@ def _init_oidc_auth(
         client_id = typer.prompt("Client ID")
     if not scopes:
         scopes = typer.prompt("Scopes", default="openid")
-    redirect_uri_val = typer.prompt("Redirect URI (or leave blank for localhost callback)", default="")
-    if redirect_uri_val:
-        profile["auth"]["redirect_uri"] = redirect_uri_val
+    if redirect_uri:
+        profile["auth"]["redirect_uri"] = redirect_uri
+    elif callback_port:
+        profile["auth"]["callback_port"] = callback_port
     else:
-        cb_port = typer.prompt("Local callback port", default="8484")
-        profile["auth"]["callback_port"] = int(cb_port)
+        redirect_uri_val = typer.prompt("Redirect URI (or leave blank for localhost callback)", default="")
+        if redirect_uri_val:
+            profile["auth"]["redirect_uri"] = redirect_uri_val
+        else:
+            cb_port = typer.prompt("Local callback port", default="8484")
+            profile["auth"]["callback_port"] = int(cb_port)
     profile["auth"]["authorize_url"] = authorize_url
     profile["auth"]["token_url"] = token_url
     profile["auth"]["client_id"] = client_id
@@ -2346,6 +2404,10 @@ def cmd_login(
     access_token_stdin: Annotated[
         bool, typer.Option("--access-token-stdin", help="Read access token from stdin")
     ] = False,
+    force_login: Annotated[
+        bool,
+        typer.Option("--force-login", help="Force fresh login (bypasses cached IdP session via prompt=login)"),
+    ] = False,
 ) -> None:
     """Login to an API that uses OAuth/token-endpoint authentication.
 
@@ -2383,7 +2445,9 @@ def cmd_login(
     if auth_type == "oidc":
         verify = profile.get("verify_ssl", True) and get_verify_ssl()
         base_url = profile.get("base_url", "").rstrip("/")
-        _oidc_login(auth_config, profile_name, no_browser=no_browser, verify=verify, base_url=base_url)
+        _oidc_login(
+            auth_config, profile_name, no_browser=no_browser, verify=verify, base_url=base_url, force_login=force_login
+        )
         _try_post_login_spec_fetch(profile)
         return
 

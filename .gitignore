@@ -45,3 +45,7 @@ htmlcov/
 # Project-specific
 CLAUDE.md
 graphify-out/
+
+# Claude Code
+.claude/settings.json
+.mcp.json
