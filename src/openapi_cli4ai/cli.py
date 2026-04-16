@@ -527,7 +527,11 @@ def _merge_allof(schemas: list[dict]) -> dict:
         for k, v in s.items():
             if k == "properties" and isinstance(v, dict):
                 for prop_name, prop_schema in v.items():
-                    if prop_name in properties and isinstance(properties[prop_name], dict) and isinstance(prop_schema, dict):
+                    if (
+                        prop_name in properties
+                        and isinstance(properties[prop_name], dict)
+                        and isinstance(prop_schema, dict)
+                    ):
                         # Deep-merge: combine keys from both schemas for the same property
                         properties[prop_name] = {**properties[prop_name], **prop_schema}
                     else:
@@ -1912,17 +1916,18 @@ def cmd_run(
     if json_body is not None:
         # Array input: validate it's appropriate and warn about unsupplied params
         if not has_request_body:
-            err_console.print("[red]This operation does not accept a request body. Array input is not valid here.[/red]")
+            err_console.print(
+                "[red]This operation does not accept a request body. Array input is not valid here.[/red]"
+            )
             raise typer.Exit(1)
-        required_params = [
-            p["name"] for p in parameters
-            if isinstance(p, dict) and p.get("in") == "path"
-        ]
+        required_params = [p["name"] for p in parameters if isinstance(p, dict) and p.get("in") == "path"]
         if required_params:
             err_console.print(
                 f"[red]Array body input cannot supply required path parameters: {', '.join(required_params)}[/red]"
             )
-            err_console.print("[dim]Use 'call' command with explicit path for operations that need both array body and path params.[/dim]")
+            err_console.print(
+                "[dim]Use 'call' command with explicit path for operations that need both array body and path params.[/dim]"
+            )
             raise typer.Exit(1)
         required_nonpath = [
             f"{p['name']} ({p.get('in', '?')})"
@@ -1946,7 +1951,9 @@ def cmd_run(
             )
     else:
         routed_body: dict | list | None
-        path_params, query_params, header_params, routed_body = _route_inputs(parsed_input, parameters, has_request_body)
+        path_params, query_params, header_params, routed_body = _route_inputs(
+            parsed_input, parameters, has_request_body
+        )
         json_body = routed_body
 
     # Substitute path parameters (URL-encode values for safety)
@@ -2202,7 +2209,16 @@ def cmd_init(
                 border_style="green",
             )
         )
-    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, yaml.YAMLError, OSError, ValueError, TypeError, AttributeError) as e:
+    except (
+        typer.Exit,
+        httpx.HTTPError,
+        json.JSONDecodeError,
+        yaml.YAMLError,
+        OSError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ) as e:
         err_console.print(f"[yellow]Warning: Could not validate spec ({e}). Profile saved anyway.[/yellow]")
 
     # Save profile
@@ -2382,7 +2398,9 @@ def cmd_login(
         err_console.print(
             "[yellow]Login is for profiles with bearer auth + token_endpoint, oidc, device, or auto.[/yellow]"
         )
-        err_console.print("[dim]If your API uses a static token or API key, set the environment variable instead.[/dim]")
+        err_console.print(
+            "[dim]If your API uses a static token or API key, set the environment variable instead.[/dim]"
+        )
         raise typer.Exit(1)
 
     # Build payload from config ({env:VAR} already resolved at profile load)
@@ -2555,7 +2573,16 @@ def _try_post_login_spec_fetch(profile: dict) -> None:
         endpoints = extract_endpoint_summaries(spec)
         spec_title = spec.get("info", {}).get("title", "Unknown")
         console.print(f"[green]Fetched spec: {spec_title} ({len(endpoints)} endpoints)[/green]")
-    except (typer.Exit, httpx.HTTPError, json.JSONDecodeError, KeyError, OSError, TypeError, ValueError, AttributeError):
+    except (
+        typer.Exit,
+        httpx.HTTPError,
+        json.JSONDecodeError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        AttributeError,
+    ):
         pass
 
 
