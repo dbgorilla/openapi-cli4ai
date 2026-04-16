@@ -7,6 +7,7 @@ import sys
 import time
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from click.exceptions import Exit as ClickExit
 
@@ -185,7 +186,7 @@ class TestTryRefreshToken:
 
         with patch("httpx.Client") as MockClient:
             mc = MagicMock()
-            mc.post.side_effect = Exception("Connection refused")
+            mc.post.side_effect = httpx.HTTPError("Connection refused")
             MockClient.return_value.__enter__ = MagicMock(return_value=mc)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             result = mod._try_refresh_token(profile, auth_config, cached)
@@ -360,7 +361,7 @@ class TestOidcRefresh:
         cached = {"refresh_token": "rt-456"}
         with patch("httpx.Client") as MockClient:
             mc = MagicMock()
-            mc.post.side_effect = Exception("timeout")
+            mc.post.side_effect = httpx.HTTPError("timeout")
             MockClient.return_value.__enter__ = MagicMock(return_value=mc)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             result = cli_mod._oidc_refresh(auth_config, cached)
@@ -770,7 +771,7 @@ class TestFetchSpec:
 
         with patch("httpx.Client") as MockClient:
             mc = MagicMock()
-            mc.get.side_effect = Exception("Network error")
+            mc.get.side_effect = httpx.HTTPError("Network error")
             MockClient.return_value.__enter__ = MagicMock(return_value=mc)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             result = mod.fetch_spec(profile)
@@ -782,7 +783,7 @@ class TestFetchSpec:
 
         with patch("httpx.Client") as MockClient:
             mc = MagicMock()
-            mc.get.side_effect = Exception("Network error")
+            mc.get.side_effect = httpx.HTTPError("Network error")
             MockClient.return_value.__enter__ = MagicMock(return_value=mc)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
             with pytest.raises((SystemExit, ClickExit)):
@@ -888,8 +889,8 @@ class TestLoadProfiles:
     def test_invalid_toml(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
         mod.CONFIG_FILE.write_text("this is not valid TOML [[[[")
-        result = mod.load_profiles()
-        assert result == {"active_profile": None, "profiles": {}}
+        with pytest.raises((SystemExit, ClickExit)):
+            mod.load_profiles()
 
     def test_toml_without_profiles_key(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
@@ -951,7 +952,7 @@ class TestGetActiveProfile:
         name, profile = mod.get_active_profile()
         assert name == "myapi"
 
-    def test_falls_back_to_first_profile(self, tmp_config, monkeypatch):
+    def test_nonexistent_active_profile_exits(self, tmp_config, monkeypatch):
         mod, tmp_path, cache_dir = tmp_config
         import tomli_w
 
@@ -964,8 +965,8 @@ class TestGetActiveProfile:
             },
         }
         mod.CONFIG_FILE.write_text(tomli_w.dumps(data))
-        name, profile = mod.get_active_profile()
-        assert name == "first"
+        with pytest.raises((SystemExit, ClickExit)):
+            mod.get_active_profile()
 
 
 # ===========================================================================
@@ -1153,17 +1154,15 @@ class TestMakeRequest:
         assert call_kwargs.kwargs["headers"]["X-Custom"] == "val"
         assert call_kwargs.kwargs["headers"]["Accept"] == "application/json"
 
-    def test_stream_raises(self):
+    def test_stream_param_removed(self):
+        """make_request no longer accepts a stream parameter; streaming is
+        handled inline in cmd_call/cmd_run."""
         profile = {
             "base_url": "https://api.example.com",
             "auth": {"type": "none"},
         }
-        with patch("httpx.Client") as MockClient:
-            mc = MagicMock()
-            MockClient.return_value.__enter__ = MagicMock(return_value=mc)
-            MockClient.return_value.__exit__ = MagicMock(return_value=False)
-            with pytest.raises(NotImplementedError):
-                cli_mod.make_request(profile, "GET", "/stream", stream=True)
+        with pytest.raises(TypeError, match="stream"):
+            cli_mod.make_request(profile, "GET", "/stream", stream=True)
 
 
 # ===========================================================================

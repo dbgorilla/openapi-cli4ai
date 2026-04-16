@@ -163,3 +163,88 @@ def test_extract_full_endpoint_schema_with_request_body(cli_module, petstore_spe
     assert endpoint is not None
     assert endpoint["method"] == "POST"
     assert endpoint["requestBody"] is not None
+
+
+def test_route_inputs_cookie_params(cli_module):
+    """Should route cookie parameters to Cookie header."""
+    parameters = [
+        {"name": "session_id", "in": "cookie"},
+        {"name": "status", "in": "query"},
+    ]
+    input_data = {"session_id": "abc123", "status": "active"}
+
+    path_params, query_params, header_params, body = cli_module._route_inputs(
+        input_data, parameters, has_request_body=False
+    )
+
+    assert path_params == {}
+    assert query_params == {"status": "active"}
+    assert header_params == {"Cookie": "session_id=abc123"}
+    assert body is None
+
+
+def test_route_inputs_multiple_cookie_params(cli_module):
+    """Should combine multiple cookie parameters into one Cookie header."""
+    parameters = [
+        {"name": "session_id", "in": "cookie"},
+        {"name": "theme", "in": "cookie"},
+    ]
+    input_data = {"session_id": "abc123", "theme": "dark"}
+
+    path_params, query_params, header_params, body = cli_module._route_inputs(
+        input_data, parameters, has_request_body=False
+    )
+
+    cookie_header = header_params.get("Cookie", "")
+    assert "session_id=abc123" in cookie_header
+    assert "theme=dark" in cookie_header
+
+
+def test_path_item_parameter_inheritance(cli_module):
+    """Path-level parameters should be inherited by operations."""
+    spec = {
+        "paths": {
+            "/users/{userId}": {
+                "parameters": [
+                    {"name": "userId", "in": "path", "required": True, "schema": {"type": "integer"}},
+                    {"name": "version", "in": "query", "schema": {"type": "string"}},
+                ],
+                "get": {
+                    "operationId": "getUser",
+                    "summary": "Get a user",
+                    "responses": {"200": {"description": "OK"}},
+                },
+            }
+        }
+    }
+    endpoint = cli_module.extract_full_endpoint_schema(spec, "getUser")
+    assert endpoint is not None
+    param_names = [p["name"] for p in endpoint["parameters"]]
+    assert "userId" in param_names, "Path-level userId should be inherited"
+    assert "version" in param_names, "Path-level version should be inherited"
+
+
+def test_operation_params_override_path_params(cli_module):
+    """Operation-level params should override path-level params with same name+in."""
+    spec = {
+        "paths": {
+            "/items/{itemId}": {
+                "parameters": [
+                    {"name": "itemId", "in": "path", "description": "from path"},
+                ],
+                "get": {
+                    "operationId": "getItem",
+                    "parameters": [
+                        {"name": "itemId", "in": "path", "description": "from operation"},
+                    ],
+                    "responses": {"200": {"description": "OK"}},
+                },
+            }
+        }
+    }
+    endpoint = cli_module.extract_full_endpoint_schema(spec, "getItem")
+    assert endpoint is not None
+    # Should have only one itemId param (operation-level wins)
+    item_params = [p for p in endpoint["parameters"] if p["name"] == "itemId"]
+    assert len(item_params) == 1
+    assert item_params[0]["description"] == "from operation"
