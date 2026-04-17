@@ -40,6 +40,14 @@ Issues = "https://github.com/dbgorilla/openapi-cli4ai/issues"
 [project.scripts]
 openapi-cli4ai = "openapi_cli4ai.cli:app"
 
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "mypy>=1.10,<2",
+    "types-PyYAML>=6,<7",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/openapi_cli4ai"]
 

@@ -22,8 +22,10 @@ jobs:
           enable-cache: true
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
+      - name: Sync dependencies
+        run: uv sync --python ${{ matrix.python-version }}
       - name: Run unit tests with coverage
-        run: uv run --python ${{ matrix.python-version }} --with pytest --with pytest-cov --with pyyaml --with typer --with httpx --with rich --with click --with tomli-w --with python-dotenv pytest tests/ -m "not integration" -v --cov=openapi_cli4ai --cov-report=term-missing
+        run: uv run --python ${{ matrix.python-version }} pytest tests/ -m "not integration" -v --cov=openapi_cli4ai --cov-report=term-missing
 
   lint:
     runs-on: ubuntu-latest
@@ -40,5 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+      - name: Sync dependencies
+        run: uv sync
       - name: Run mypy
-        run: uv run --with mypy --with types-PyYAML --with pyyaml --with typer --with httpx --with rich --with click --with tomli-w --with python-dotenv mypy src/openapi_cli4ai/ --ignore-missing-imports
+        run: uv run mypy src/openapi_cli4ai/ --ignore-missing-imports
