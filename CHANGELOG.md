@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-04-21
+
+### Added
+
+- `--force-login` flag to bypass cached tokens (#9)
+- Non-interactive `init` flags for scripted profile creation (#9)
+- Security hardening across CLI surfaces (#10)
+- OpenAPI spec composition support (#10)
+- `py.typed` marker for downstream type checkers (#13)
+
+### Changed
+
+- SHA-pinned publish workflow and simplified CI (#13)
+- Dependency updates: `rich` (#12), GitHub Actions group (#11)
+
+## [0.4.0] - 2026-04-15
+
+### Added
+
+- OIDC Device Flow auth type for headless/SSH environments
+- Token exchange and auto-discovery of OIDC endpoints
+- Token injection from environment for CI use cases
+
 ## [0.3.0] - 2026-03-28
 
 ### Added
