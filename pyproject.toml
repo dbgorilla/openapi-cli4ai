@@ -44,7 +44,7 @@ openapi-cli4ai = "openapi_cli4ai.cli:app"
 dev = [
     "pytest>=8",
     "pytest-cov>=5",
-    "mypy>=1.10,<2",
+    "mypy>=1.10,<3",
     "types-PyYAML>=6,<7",
 ]
 
