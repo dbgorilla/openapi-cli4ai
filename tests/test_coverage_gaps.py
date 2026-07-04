@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import tomli_w
-from click.exceptions import Exit as ClickExit
+from typer import Exit as ClickExit
 from typer.testing import CliRunner
 
 from openapi_cli4ai.cli import app

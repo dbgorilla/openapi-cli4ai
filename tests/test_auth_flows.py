@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
-from click.exceptions import Exit as ClickExit
+from typer import Exit as ClickExit
 
 from openapi_cli4ai import cli as cli_mod
 

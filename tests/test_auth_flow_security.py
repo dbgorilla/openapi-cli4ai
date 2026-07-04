@@ -62,9 +62,9 @@ class TestOAuthBearer:
         }
         token_cache.write_text(json.dumps(token_data))
 
-        import click
+        import typer
 
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             cli._oauth_bearer(profile, profile["auth"])
 
 

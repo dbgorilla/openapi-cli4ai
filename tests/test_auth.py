@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 
 import pytest
-from click.exceptions import Exit as ClickExit
+from typer import Exit as ClickExit
 
 
 def test_auth_none(cli_module):

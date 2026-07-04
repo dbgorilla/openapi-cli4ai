@@ -10,7 +10,7 @@ import inspect
 import socket
 from unittest.mock import MagicMock, patch
 
-import click
+import typer
 import pytest
 
 from openapi_cli4ai import cli as cli_mod
@@ -41,7 +41,7 @@ class TestSpecificExceptions:
             mock_client.get.side_effect = httpx.ConnectError("mocked connection error")
             mock_mc.return_value = mock_client
 
-            with pytest.raises(click.exceptions.Exit):
+            with pytest.raises(typer.Exit):
                 cli.fetch_spec(profile, refresh=True)
 
     def test_try_refresh_token_catches_specific_errors(self, tmp_config):
@@ -113,7 +113,7 @@ class TestOIDCServerCleanup:
             sock.listen(1)
 
             # Calling _oidc_login_browser on this port should exit cleanly
-            with pytest.raises(click.exceptions.Exit):
+            with pytest.raises(typer.Exit):
                 cli_mod._oidc_login_browser("http://auth.example.com/authorize", port, "test_state")
         finally:
             sock.close()
