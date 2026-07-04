@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.1] - 2026-07-04
+
+### Fixed
+
+- Ingest YAML OpenAPI specs served as `application/vnd.oai.openapi` (e.g. Codecov's schema endpoint), with a YAML fallback when a body advertised as JSON fails to decode (#22)
+- `--version` now derives from installed package metadata instead of a hardcoded literal that had drifted from the real version (#22)
+
+### Changed
+
+- Commit `uv.lock` and use `uv sync --locked` in CI for reproducible builds; Dependabot now updates the lockfile via the `uv` ecosystem (#20)
+- Dependency updates: `typer` 0.26 (with test adjustments for its vendored `click`), plus the python-deps and GitHub Actions groups (#21, #19, #16)
+
 ## [0.5.0] - 2026-04-21
 
 ### Added
