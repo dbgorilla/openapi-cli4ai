@@ -30,6 +30,7 @@ dependencies = [
     "pyyaml>=6,<7",
     "python-dotenv>=1.0,<2",
     "tomli-w>=1.0,<2",
+    "publicsuffix2>=2.2,<3",
 ]
 
 [project.urls]

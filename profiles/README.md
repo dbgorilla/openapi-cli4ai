@@ -27,7 +27,10 @@ a **tier**, shown next to every entry, not a gate on being listed.
 | **Community** | `community/` | Contributed via PR and passed automated validation. Not manually vetted. |
 
 New submissions go to `community/`; a maintainer may promote a profile to
-`verified/` after checking it end to end.
+`verified/` after checking it end to end. Installing a **community** profile
+prompts for confirmation (it shows the `base_url` your credentials would be
+sent to); **verified** profiles install without a prompt. Use `--yes` to skip
+the prompt in scripts.
 
 ## Profile format
 
@@ -65,6 +68,8 @@ Validate before opening the PR — the CLI is the single source of truth:
 uv run openapi-cli4ai catalog validate profiles/community/<slug>.toml
 ```
 
-CI runs `catalog validate --all` on every PR touching `profiles/`, checking the
-fields, a live OpenAPI spec fetch, the ownership heuristic, and that no secrets
-are inlined. Errors are posted inline on the PR.
+CI runs `catalog validate --all` on every PR touching `profiles/`. It checks the
+fields and (Public Suffix List-based) domain ownership, fetches the OpenAPI spec
+behind SSRF guards with size/redirect/timeout limits, rejects inlined secrets,
+and flags prompt-injection markers in the description. Errors are posted inline
+on the PR.

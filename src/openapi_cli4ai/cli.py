@@ -29,11 +29,13 @@ import hashlib
 import importlib.resources
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
 import html as html_module  # noqa: F401 (used by F3: OIDC callback HTML escaping)
+import ipaddress
 import json
 import os
 import random
 import re
 import secrets
+import socket
 import sys
 import tempfile
 import time
@@ -49,6 +51,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import httpx  # noqa: E402
+from publicsuffix2 import get_sld  # noqa: E402
 import tomli_w  # noqa: E402
 import typer  # noqa: E402
 import yaml  # noqa: E402
@@ -2844,6 +2847,18 @@ _CATALOG_PROMO_TERMS = (
     "get started",
 )
 _CATALOG_SECRET_KEYS = ("token", "password", "secret", "api_key", "apikey", "client_secret")
+# Stored prompt-injection markers: catalog text ships in the wheel and feeds the AI router.
+_CATALOG_INJECTION_MARKERS = (
+    "ignore previous",
+    "ignore all previous",
+    "disregard the",
+    "system prompt",
+    "you are now",
+    "new instructions",
+    "</system>",
+    "<|im_start|>",
+)
+_CATALOG_MAX_SPEC_BYTES = 5 * 1024 * 1024
 
 
 def _catalog_root() -> Any:
@@ -2919,9 +2934,46 @@ def _auth_summary(auth: dict) -> str:
 
 
 def _registrable_domain(host: str) -> str:
-    """Last two labels of a hostname (heuristic; no public-suffix list)."""
-    labels = host.lower().split(".")
-    return ".".join(labels[-2:]) if len(labels) >= 2 else host.lower()
+    """Registrable domain via the Public Suffix List (handles co.uk, shared hosts)."""
+    return (get_sld(host.lower()) or host.lower()) if host else ""
+
+
+def _assert_public_url(url: str) -> None:
+    """Reject non-https or non-public hosts. SSRF guard for validation fetches.
+
+    Catalog profiles describe public APIs; the CI validator must never be
+    coaxed into fetching cloud-metadata (169.254.169.254) or internal hosts.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"must be an https:// URL (got '{parsed.scheme or 'no scheme'}')")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("URL has no host")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise ValueError(f"cannot resolve host '{host}': {exc}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global or ip.is_multicast or ip.is_reserved:
+            raise ValueError(f"host '{host}' resolves to non-public address {ip}")
+
+
+def _fetch_public_spec(url: str) -> tuple[str, str]:
+    """SSRF-guarded, size-capped, timeout-bounded fetch of a catalog spec URL."""
+    _assert_public_url(url)
+    with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=True, max_redirects=3) as client:
+        with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            _assert_public_url(str(resp.url))  # re-check the post-redirect host
+            content_type = resp.headers.get("content-type", "")
+            body = bytearray()
+            for chunk in resp.iter_bytes():
+                body += chunk
+                if len(body) > _CATALOG_MAX_SPEC_BYTES:
+                    raise ValueError(f"spec exceeds {_CATALOG_MAX_SPEC_BYTES // (1024 * 1024)}MB limit")
+    return content_type, bytes(body).decode("utf-8", errors="replace")
 
 
 def _parse_openapi_text(content_type: str, text: str) -> Any:
@@ -2957,6 +3009,9 @@ def _validate_catalog_entry(entry: dict, *, check_spec: bool) -> tuple[list[str]
     promo = [t for t in _CATALOG_PROMO_TERMS if t in desc.lower()]
     if promo:
         warnings.append(f"description contains promotional terms {promo}; keep it factual")
+    injection = [m for m in _CATALOG_INJECTION_MARKERS if m in desc.lower()]
+    if injection:
+        errors.append(f"description contains prompt-injection markers {injection}")
 
     for field in ("source", "base_url"):
         if not str(entry[field]).startswith("https://"):
@@ -2990,12 +3045,10 @@ def _validate_catalog_entry(entry: dict, *, check_spec: bool) -> tuple[list[str]
         profile = _catalog_to_profile(entry)
         try:
             spec_url = _resolve_spec_url(profile)
-            with _make_client() as client:
-                resp = client.get(spec_url)
-                resp.raise_for_status()
-            spec = _parse_openapi_text(resp.headers.get("content-type", ""), resp.text)
+            content_type, text = _fetch_public_spec(spec_url)
+            spec = _parse_openapi_text(content_type, text)
         except (httpx.HTTPError, ValueError, yaml.YAMLError) as exc:
-            errors.append(f"spec not reachable/parseable: {exc}")
+            errors.append(f"spec not reachable/valid: {exc}")
             return errors, warnings
         if not isinstance(spec, dict) or not (spec.get("openapi") or spec.get("swagger")):
             errors.append("spec is not a valid OpenAPI/Swagger document")
@@ -3071,6 +3124,7 @@ def cmd_catalog_install(
     name: Annotated[str, typer.Argument(help="Catalog profile name")],
     use: Annotated[bool, typer.Option("--use", help="Set as the active profile")] = False,
     force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite an existing profile")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the community-profile confirmation")] = False,
 ) -> None:
     """Install a catalog profile into your config."""
     entry = _catalog_find(name)
@@ -3078,6 +3132,26 @@ def cmd_catalog_install(
         err_console.print(f"[red]No catalog profile named '{name}'.[/red] Try 'openapi-cli4ai catalog search {name}'.")
         raise typer.Exit(1)
     slug = str(entry.get("_slug"))
+    tier = entry.get("_tier", "community")
+
+    # Community profiles are auto-validated but not maintainer-verified. Installing
+    # writes an endpoint that will receive the user's credentials on the first call,
+    # so require an explicit opt-in (VS Code unverified-publisher pattern).
+    if tier != "verified" and not yes:
+        console.print(
+            Panel(
+                "[yellow]Community profile — not verified by openapi-cli4ai maintainers.[/yellow]\n\n"
+                f"base_url:   {entry.get('base_url')}\n"
+                f"source:     {entry.get('source')}\n"
+                f"maintainer: @{entry.get('maintainer')}\n\n"
+                "Installing writes this endpoint to your config. Your requests — including\n"
+                "any auth credentials — will be sent to base_url. Only proceed if you trust it.",
+                border_style="yellow",
+                title="⚠  Review before installing",
+            )
+        )
+        if not typer.confirm("Proceed?", default=False):
+            raise typer.Exit(0)
 
     data = load_profiles()
     profiles = data.setdefault("profiles", {})
@@ -3090,9 +3164,9 @@ def cmd_catalog_install(
         data["active_profile"] = slug
     save_profiles(data)
 
-    console.print(f"[green]✓ Added profile '{slug}' to {CONFIG_FILE}[/green]")
-    if entry.get("_tier") != "verified":
-        console.print("  [dim](community profile — not maintainer-verified)[/dim]")
+    verified = tier == "verified"
+    badge = "[green]✓ Verified profile[/green]" if verified else "[yellow]community profile[/yellow]"
+    console.print(f"[green]✓ Added profile '{slug}'[/green] ({badge}) to {CONFIG_FILE}")
 
     # Next steps use --profile so they work regardless of the active profile.
     auth = entry.get("auth", {})
