@@ -1,0 +1,13 @@
+# Xquik REST API profile for openapi-cli4ai
+# Set XQUIK_API_KEY before calling authenticated endpoints.
+
+active_profile = "xquik"
+
+[profiles.xquik]
+base_url = "https://xquik.com"
+openapi_url = "https://xquik.com/openapi.json"
+
+[profiles.xquik.auth]
+type = "api-key"
+env_var = "XQUIK_API_KEY"
+header = "x-api-key"
