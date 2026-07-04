@@ -1,0 +1,11 @@
+# Verified catalog profile. Validated by a maintainer against a live spec.
+name = "petstore"
+description = "Swagger Petstore — the OpenAPI 3 sample API"
+maintainer = "dbgorilla"
+source = "https://petstore3.swagger.io"
+
+base_url = "https://petstore3.swagger.io/api/v3"
+openapi_url = "https://petstore3.swagger.io/api/v3/openapi.json"
+
+[auth]
+type = "none"

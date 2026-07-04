@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dbgorilla/openapi-cli4ai/blob/main/profiles/profile.schema.json",
+  "title": "openapi-cli4ai catalog profile",
+  "description": "A maintainer- or community-contributed API profile for the openapi-cli4ai catalog. One profile per file. Never inline secrets — reference them via *_env_var fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "description", "maintainer", "source", "base_url", "auth"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$",
+      "description": "Catalog slug (lowercase letters, digits, hyphens). Must match the file name without extension."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 100,
+      "description": "One factual line describing what the API is. No marketing copy."
+    },
+    "maintainer": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9-]{1,39}$",
+      "description": "GitHub username of the person submitting and maintaining this profile."
+    },
+    "source": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "description": "Official developer or documentation URL for the API. Used for the ownership check (must share a registrable domain with base_url)."
+    },
+    "base_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "description": "Base URL the CLI calls."
+    },
+    "openapi_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "description": "Absolute URL to the OpenAPI spec. Provide this or openapi_path."
+    },
+    "openapi_path": {
+      "type": "string",
+      "pattern": "^/",
+      "description": "Path to the OpenAPI spec relative to base_url. Provide this or openapi_url."
+    },
+    "auth": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["none", "bearer", "oidc", "device", "api-key", "basic"],
+          "description": "Auth strategy. Type-specific fields (e.g. env_var, header, token_url, issuer_url) are allowed. Secrets must be referenced by env var name, never inlined."
+        }
+      }
+    }
+  },
+  "anyOf": [
+    { "required": ["openapi_url"] },
+    { "required": ["openapi_path"] }
+  ]
+}
