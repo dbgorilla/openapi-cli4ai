@@ -1210,6 +1210,12 @@ class TestMainCallback:
         assert "openapi-cli4ai" in result.output
         assert mod.VERSION in result.output
 
+    def test_version_derived_from_package_metadata(self, cli_module):
+        """VERSION comes from installed package metadata, not a hardcoded literal."""
+        from importlib.metadata import version
+
+        assert cli_module.VERSION == version("openapi-cli4ai")
+
     def test_no_subcommand_shows_help(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config
 

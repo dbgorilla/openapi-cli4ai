@@ -26,6 +26,7 @@ import base64
 import binascii
 from email.utils import parsedate_to_datetime
 import hashlib
+from importlib.metadata import version as _pkg_version, PackageNotFoundError
 import html as html_module  # noqa: F401 (used by F3: OIDC callback HTML escaping)
 import json
 import os
@@ -56,8 +57,11 @@ from rich.panel import Panel  # noqa: E402
 from rich.table import Table  # noqa: E402
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-VERSION = "0.4.0"
 APP_NAME = "openapi-cli4ai"
+try:
+    VERSION = _pkg_version(APP_NAME)
+except PackageNotFoundError:  # running from a source checkout without an install
+    VERSION = "0.0.0+dev"
 CONFIG_FILE = Path.home() / ".openapi-cli4ai.toml"
 CACHE_DIR = Path.home() / ".cache" / APP_NAME
 CACHE_TTL = 3600  # 1 hour
