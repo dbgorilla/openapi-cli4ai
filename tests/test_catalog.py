@@ -136,6 +136,8 @@ def test_catalog_install_writes_profile_and_activates(tmp_config):
     assert prof["base_url"] == "https://petstore3.swagger.io/api/v3"
     # catalog-only metadata must not leak into the runtime profile
     assert "maintainer" not in prof and "description" not in prof
+    # next steps guide the user with --profile
+    assert "--profile petstore" in result.output
 
 
 def test_catalog_install_unknown(tmp_config):
@@ -168,3 +170,50 @@ def test_catalog_validate_file_catches_bad_profile(tmp_config):
     result = runner.invoke(app, ["catalog", "validate", str(bad), "--offline"])
     assert result.exit_code == 1
     assert "ownership" in result.output.lower() or "FAIL" in result.output
+
+
+# ── --profile flag ────────────────────────────────────────────────────────────
+
+
+def _write_two_profiles(mod) -> None:
+    mod.CONFIG_FILE.write_text(
+        tomli_w.dumps(
+            {
+                "active_profile": "a",
+                "profiles": {
+                    "a": {"base_url": "https://a.example.com", "auth": {"type": "none"}},
+                    "b": {"base_url": "https://b.example.com", "auth": {"type": "none"}},
+                },
+            }
+        )
+    )
+
+
+def test_profile_flag_overrides_active(cli_module, tmp_config, monkeypatch):
+    mod = cli_module
+    _write_two_profiles(mod)
+    monkeypatch.setattr(mod, "_profile_override", "b")
+    name, profile = mod.get_active_profile()
+    assert name == "b"
+    assert profile["base_url"] == "https://b.example.com"
+
+
+def test_profile_flag_beats_env(cli_module, tmp_config, monkeypatch):
+    mod = cli_module
+    _write_two_profiles(mod)
+    monkeypatch.setenv("OAC_PROFILE", "a")
+    monkeypatch.setattr(mod, "_profile_override", "b")
+    name, _ = mod.get_active_profile()
+    assert name == "b"
+
+
+def test_profile_flag_unknown_exits(tmp_config):
+    mod, _tmp_path, _cache_dir = tmp_config
+    mod.CONFIG_FILE.write_text(
+        tomli_w.dumps(
+            {"active_profile": "a", "profiles": {"a": {"base_url": "https://a.example.com", "auth": {"type": "none"}}}}
+        )
+    )
+    # exit 1 (profile-not-found), not 2 (unknown option) — proves the flag is wired
+    result = runner.invoke(app, ["--profile", "nope", "endpoints"])
+    assert result.exit_code == 1

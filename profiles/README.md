@@ -6,9 +6,10 @@ lives, and how it authenticates. The catalog is bundled into the package, so
 these commands work offline:
 
 ```bash
-openapi-cli4ai catalog search cov       # find profiles
-openapi-cli4ai catalog show codecov     # preview one
-openapi-cli4ai catalog install codecov  # add it to your config, with next steps
+openapi-cli4ai catalog search cov            # find profiles
+openapi-cli4ai catalog show codecov          # preview one
+openapi-cli4ai catalog install codecov       # add it to your config, with next steps
+openapi-cli4ai --profile codecov endpoints   # use it (no activation needed)
 ```
 
 `install` maps the catalog entry into your `~/.openapi-cli4ai.toml`, tells you

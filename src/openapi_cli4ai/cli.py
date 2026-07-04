@@ -114,6 +114,7 @@ err_console = Console(stderr=True)
 _verbose_mode = False
 _timeout_seconds = 60.0
 _max_retries = 0
+_profile_override: Optional[str] = None
 
 
 def set_insecure_mode(insecure: bool) -> None:
@@ -375,7 +376,7 @@ def _resolve_env_vars(obj: Any) -> Any:
 def get_active_profile() -> tuple[str, dict]:
     """Return (name, profile_dict) for the active profile.
 
-    Priority: OAC_PROFILE env var > config file active_profile.
+    Priority: --profile flag > OAC_PROFILE env var > config file active_profile.
     Resolves {env:VAR_NAME} placeholders throughout the profile.
     """
     data = load_profiles()
@@ -385,14 +386,18 @@ def get_active_profile() -> tuple[str, dict]:
         err_console.print("[red]No profiles configured. Run 'openapi-cli4ai init' to set one up.[/red]")
         raise typer.Exit(1)
 
-    # Check env var override
+    # Priority: --profile flag > OAC_PROFILE env var > config active_profile
     env_profile = os.environ.get(f"{ENV_PREFIX}PROFILE")
-    name = env_profile or data.get("active_profile")
+    name = _profile_override or env_profile or data.get("active_profile")
 
     if name and name not in profiles:
-        err_console.print(
-            f"[red]Profile '{name}' not found{' (from OAC_PROFILE env var)' if env_profile else ''}.[/red]"
-        )
+        if _profile_override:
+            origin = " (from --profile)"
+        elif env_profile:
+            origin = " (from OAC_PROFILE env var)"
+        else:
+            origin = ""
+        err_console.print(f"[red]Profile '{name}' not found{origin}.[/red]")
         available = ", ".join(profiles.keys())
         err_console.print(f"[dim]Available profiles: {available}[/dim]")
         raise typer.Exit(1)
@@ -3083,27 +3088,22 @@ def cmd_catalog_install(
     profiles[slug] = _catalog_to_profile(entry)
     if use or not data.get("active_profile"):
         data["active_profile"] = slug
-    became_active = data.get("active_profile") == slug
     save_profiles(data)
 
     console.print(f"[green]✓ Added profile '{slug}' to {CONFIG_FILE}[/green]")
     if entry.get("_tier") != "verified":
         console.print("  [dim](community profile — not maintainer-verified)[/dim]")
 
-    # Accurate, ordered next steps. There is no per-command --profile flag;
-    # a profile is selected by being active (or via the OAC_PROFILE env var).
+    # Next steps use --profile so they work regardless of the active profile.
     auth = entry.get("auth", {})
     step = 1
-    if not became_active:
-        console.print(f"  [yellow]{step}.[/yellow] Activate it: [cyan]openapi-cli4ai profile use {slug}[/cyan]")
-        step += 1
     for var in _auth_env_vars(auth):
         console.print(f"  [yellow]{step}.[/yellow] Set your credential: [cyan]export {var}=...[/cyan]")
         step += 1
     if _auth_uses_login(auth):
-        console.print(f"  [yellow]{step}.[/yellow] Sign in: [cyan]openapi-cli4ai login[/cyan]")
+        console.print(f"  [yellow]{step}.[/yellow] Sign in: [cyan]openapi-cli4ai --profile {slug} login[/cyan]")
         step += 1
-    console.print(f"  [yellow]{step}.[/yellow] Try it: [cyan]openapi-cli4ai endpoints[/cyan]")
+    console.print(f"  [yellow]{step}.[/yellow] Try it: [cyan]openapi-cli4ai --profile {slug} endpoints[/cyan]")
 
 
 def _gh_annotate(level: str, file: str, msg: str) -> None:
@@ -3166,6 +3166,9 @@ def cmd_catalog_validate(
 def main(
     ctx: typer.Context,
     version: Annotated[bool, typer.Option("--version", help="Show version")] = False,
+    profile: Annotated[
+        Optional[str], typer.Option("--profile", "-p", help="Use this profile for this command only")
+    ] = None,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show request/response details")] = False,
     timeout: Annotated[float, typer.Option("--timeout", help="HTTP timeout in seconds")] = 60.0,
@@ -3176,11 +3179,12 @@ def main(
     Point it at an OpenAPI spec. Discover endpoints. Call them directly or let
     an LLM figure out the right one from your natural language query.
     """
-    global _verbose_mode, _timeout_seconds, _max_retries
+    global _verbose_mode, _timeout_seconds, _max_retries, _profile_override
     set_insecure_mode(insecure)
     _verbose_mode = verbose
     _timeout_seconds = timeout
     _max_retries = retries
+    _profile_override = profile
 
     if version:
         console.print(f"{APP_NAME} {VERSION}")
@@ -3191,9 +3195,10 @@ def main(
             Panel(
                 f"[bold]{APP_NAME}[/bold] v{VERSION}\n\n"
                 "[cyan]init[/cyan]       Point it at any API with an OpenAPI spec\n"
+                "[cyan]catalog[/cyan]    Browse & install ready-made API profiles\n"
                 "[cyan]endpoints[/cyan]  Discover and search API endpoints\n"
                 "[cyan]call[/cyan]       Call any endpoint directly\n"
-                "[cyan]profile[/cyan]    Manage API profiles\n"
+                "[cyan]profile[/cyan]    Manage your installed profiles\n"
                 "[cyan]login[/cyan]      Authenticate (OAuth/token flows)\n"
                 "[cyan]logout[/cyan]     Clear cached auth tokens\n\n"
                 "[dim]Run any command with --help for details.[/dim]",
