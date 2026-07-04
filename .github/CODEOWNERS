@@ -1,2 +1,7 @@
 # Default: all PRs require review from a maintainer
 * @dbgorilla/maintainers
+
+# Catalog profiles. Both tiers require maintainer approval for now; the
+# community tier can later point at a broader reviewer team.
+/profiles/verified/  @dbgorilla/maintainers
+/profiles/community/ @dbgorilla/maintainers
