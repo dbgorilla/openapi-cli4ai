@@ -26,6 +26,7 @@ import base64
 import binascii
 from email.utils import parsedate_to_datetime
 import hashlib
+from importlib.metadata import version as _pkg_version, PackageNotFoundError
 import html as html_module  # noqa: F401 (used by F3: OIDC callback HTML escaping)
 import json
 import os
@@ -56,8 +57,11 @@ from rich.panel import Panel  # noqa: E402
 from rich.table import Table  # noqa: E402
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-VERSION = "0.4.0"
 APP_NAME = "openapi-cli4ai"
+try:
+    VERSION = _pkg_version(APP_NAME)
+except PackageNotFoundError:  # running from a source checkout without an install
+    VERSION = "0.0.0+dev"
 CONFIG_FILE = Path.home() / ".openapi-cli4ai.toml"
 CACHE_DIR = Path.home() / ".cache" / APP_NAME
 CACHE_TTL = 3600  # 1 hour
@@ -458,11 +462,22 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
                 f"Got HTML instead of OpenAPI spec from {spec_url} — the server may have a frontend catch-all route"
             )
 
-        # Handle JSON or YAML
-        if "yaml" in content_type or spec_url.endswith((".yaml", ".yml")):
+        # Handle JSON or YAML. Some servers serve a YAML spec under a
+        # non-obvious media type — e.g. Codecov's schema endpoint returns
+        # "application/vnd.oai.openapi" (the standard OpenAPI YAML type),
+        # which contains neither "yaml" nor a ".yaml" suffix. Prefer JSON
+        # when the type says so (covers the "+json" variant), route known
+        # YAML types to the YAML parser, and fall back to YAML if a body
+        # not advertised as JSON fails to decode.
+        ct = content_type.lower()
+        is_yaml = "yaml" in ct or "vnd.oai.openapi" in ct or spec_url.endswith((".yaml", ".yml"))
+        if is_yaml and "json" not in ct:
             spec = yaml.safe_load(resp.text)
         else:
-            spec = resp.json()
+            try:
+                spec = resp.json()
+            except json.JSONDecodeError:
+                spec = yaml.safe_load(resp.text)
 
         # Write cache atomically to prevent partial writes
         ensure_dirs()
