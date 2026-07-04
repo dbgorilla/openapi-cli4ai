@@ -26,6 +26,7 @@ import base64
 import binascii
 from email.utils import parsedate_to_datetime
 import hashlib
+import importlib.resources
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
 import html as html_module  # noqa: F401 (used by F3: OIDC callback HTML escaping)
 import json
@@ -101,8 +102,10 @@ app = typer.Typer(
     help="Turn any REST API with an OpenAPI spec into an AI-ready CLI.",
     no_args_is_help=True,
 )
-profile_app = typer.Typer(help="Manage API profiles.")
+profile_app = typer.Typer(help="Manage your installed API profiles.")
 app.add_typer(profile_app, name="profile")
+catalog_app = typer.Typer(help="Browse and install ready-made API profiles.")
+app.add_typer(catalog_app, name="catalog")
 
 # Global state
 _insecure_mode = False
@@ -2815,6 +2818,347 @@ def cmd_profile_show(
             border_style="cyan",
         )
     )
+
+
+# ── Profile Catalog ───────────────────────────────────────────────────────────
+CATALOG_TIERS = ("verified", "community")
+_CATALOG_META_FIELDS = ("name", "description", "maintainer", "source")
+_CATALOG_AUTH_TYPES = ("none", "bearer", "oidc", "device", "api-key", "basic")
+_CATALOG_PROMO_TERMS = (
+    "best",
+    "fastest",
+    "leading",
+    "#1",
+    "world-class",
+    "cutting-edge",
+    "revolutionary",
+    "seamless",
+    "powerful",
+    "sign up",
+    "free trial",
+    "get started",
+)
+_CATALOG_SECRET_KEYS = ("token", "password", "secret", "api_key", "apikey", "client_secret")
+
+
+def _catalog_root() -> Any:
+    """Locate the catalog: bundled in the wheel, else profiles/ in a source checkout."""
+    try:
+        bundled = importlib.resources.files("openapi_cli4ai") / "_catalog"
+        if bundled.is_dir():
+            return bundled
+    except (ModuleNotFoundError, FileNotFoundError, AttributeError, TypeError):
+        pass
+    dev = Path(__file__).resolve().parents[2] / "profiles"
+    return dev if dev.is_dir() else None
+
+
+def _load_catalog() -> list[dict]:
+    """Return every catalog profile as a dict with _tier and _slug attached."""
+    root = _catalog_root()
+    entries: list[dict] = []
+    if root is None:
+        return entries
+    for tier in CATALOG_TIERS:
+        tier_dir = root / tier
+        if not tier_dir.is_dir():
+            continue
+        for item in sorted(tier_dir.iterdir(), key=lambda p: p.name):
+            if not item.name.endswith(".toml"):
+                continue
+            try:
+                entry = tomllib.loads(item.read_text(encoding="utf-8"))
+            except (OSError, tomllib.TOMLDecodeError):
+                continue
+            entry["_tier"] = tier
+            entry["_slug"] = item.name[: -len(".toml")]
+            entries.append(entry)
+    return entries
+
+
+def _catalog_find(name: str) -> Optional[dict]:
+    for entry in _load_catalog():
+        if name in (entry.get("_slug"), entry.get("name")):
+            return entry
+    return None
+
+
+def _catalog_to_profile(entry: dict) -> dict:
+    """Map a catalog entry to a runtime profile (drop catalog-only metadata)."""
+    profile = {k: v for k, v in entry.items() if k not in _CATALOG_META_FIELDS and not k.startswith("_")}
+    profile["verify_ssl"] = True
+    return profile
+
+
+def _auth_env_vars(auth: dict) -> list[str]:
+    """Environment variables the user must set for this auth config."""
+    keys = {
+        "api-key": ("env_var",),
+        "bearer": ("token_env_var",),
+        "basic": ("username_env_var", "password_env_var"),
+    }.get(auth.get("type", "none"), ())
+    return [auth[k] for k in keys if auth.get(k)]
+
+
+def _auth_uses_login(auth: dict) -> bool:
+    kind = auth.get("type", "none")
+    return kind in ("oidc", "device") or (kind == "bearer" and bool(auth.get("token_endpoint")))
+
+
+def _auth_summary(auth: dict) -> str:
+    kind = auth.get("type", "none")
+    if _auth_uses_login(auth):
+        return f"{kind} → run 'login'"
+    env = _auth_env_vars(auth)
+    return f"{kind} → set {', '.join(env)}" if env else kind
+
+
+def _registrable_domain(host: str) -> str:
+    """Last two labels of a hostname (heuristic; no public-suffix list)."""
+    labels = host.lower().split(".")
+    return ".".join(labels[-2:]) if len(labels) >= 2 else host.lower()
+
+
+def _parse_openapi_text(content_type: str, text: str) -> Any:
+    ct = content_type.lower()
+    if ("yaml" in ct or "vnd.oai.openapi" in ct) and "json" not in ct:
+        return yaml.safe_load(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return yaml.safe_load(text)
+
+
+def _validate_catalog_entry(entry: dict, *, check_spec: bool) -> tuple[list[str], list[str]]:
+    """Return (errors, warnings) for one catalog entry. Errors block a submission."""
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    for field in ("name", "description", "maintainer", "source", "base_url", "auth"):
+        if not entry.get(field):
+            errors.append(f"missing required field '{field}'")
+    if errors:
+        return errors, warnings
+
+    name = str(entry["name"])
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?", name):
+        errors.append(f"name '{name}' must be lowercase letters, digits, and hyphens")
+    if entry.get("_slug") and entry["_slug"] != name:
+        errors.append(f"name '{name}' must match the file name '{entry['_slug']}'")
+
+    desc = str(entry["description"])
+    if not 3 <= len(desc) <= 100:
+        errors.append("description must be 3-100 characters")
+    promo = [t for t in _CATALOG_PROMO_TERMS if t in desc.lower()]
+    if promo:
+        warnings.append(f"description contains promotional terms {promo}; keep it factual")
+
+    for field in ("source", "base_url"):
+        if not str(entry[field]).startswith("https://"):
+            errors.append(f"{field} must be an https:// URL")
+    if entry.get("openapi_url") and not str(entry["openapi_url"]).startswith("https://"):
+        errors.append("openapi_url must be an https:// URL")
+    if not entry.get("openapi_url") and not entry.get("openapi_path"):
+        errors.append("provide either openapi_url or openapi_path")
+
+    auth = entry.get("auth")
+    if not isinstance(auth, dict) or auth.get("type") not in _CATALOG_AUTH_TYPES:
+        errors.append(f"auth.type must be one of: {', '.join(_CATALOG_AUTH_TYPES)}")
+    else:
+        for key, value in auth.items():
+            if key.lower() in _CATALOG_SECRET_KEYS and isinstance(value, str):
+                errors.append(f"auth.{key} looks like an inline secret; reference an *_env_var instead")
+
+    if errors:
+        return errors, warnings
+
+    base_host = urllib.parse.urlparse(str(entry["base_url"])).hostname or ""
+    source_host = urllib.parse.urlparse(str(entry["source"])).hostname or ""
+    if _registrable_domain(base_host) != _registrable_domain(source_host):
+        errors.append(
+            f"ownership: base_url domain '{_registrable_domain(base_host)}' != "
+            f"source domain '{_registrable_domain(source_host)}' "
+            "(source must be the API's own developer/docs URL)"
+        )
+
+    if check_spec:
+        profile = _catalog_to_profile(entry)
+        try:
+            spec_url = _resolve_spec_url(profile)
+            with _make_client() as client:
+                resp = client.get(spec_url)
+                resp.raise_for_status()
+            spec = _parse_openapi_text(resp.headers.get("content-type", ""), resp.text)
+        except (httpx.HTTPError, ValueError, yaml.YAMLError) as exc:
+            errors.append(f"spec not reachable/parseable: {exc}")
+            return errors, warnings
+        if not isinstance(spec, dict) or not (spec.get("openapi") or spec.get("swagger")):
+            errors.append("spec is not a valid OpenAPI/Swagger document")
+
+    return errors, warnings
+
+
+def _render_catalog(entries: list[dict], title: str) -> None:
+    if not entries:
+        console.print("[dim]The catalog is empty.[/dim]")
+        return
+    table = Table(title=f"{title} ({len(entries)})")
+    table.add_column("Name", style="cyan")
+    table.add_column("Tier")
+    table.add_column("Description", style="green")
+    for entry in sorted(entries, key=lambda e: (e.get("_tier", ""), e.get("_slug", ""))):
+        tier = entry.get("_tier", "community")
+        style = "bold green" if tier == "verified" else "yellow"
+        table.add_row(entry.get("_slug", "?"), f"[{style}]{tier}[/{style}]", str(entry.get("description", "")))
+    console.print(table)
+    console.print("[dim]Install one with: openapi-cli4ai catalog install <name>[/dim]")
+
+
+@catalog_app.command("list")
+def cmd_catalog_list() -> None:
+    """List every profile in the catalog."""
+    _render_catalog(_load_catalog(), title="Catalog")
+
+
+@catalog_app.command("search")
+def cmd_catalog_search(
+    query: Annotated[str, typer.Argument(help="Match against name or description")],
+) -> None:
+    """Search the catalog by name or description."""
+    q = query.lower()
+    matches = [
+        e for e in _load_catalog() if q in str(e.get("_slug", "")).lower() or q in str(e.get("description", "")).lower()
+    ]
+    if not matches:
+        console.print(f"[dim]No catalog profiles match '{query}'.[/dim]")
+        return
+    _render_catalog(matches, title=f"Catalog — '{query}'")
+
+
+@catalog_app.command("show")
+def cmd_catalog_show(
+    name: Annotated[str, typer.Argument(help="Catalog profile name")],
+) -> None:
+    """Show details for a catalog profile."""
+    entry = _catalog_find(name)
+    if entry is None:
+        err_console.print(f"[red]No catalog profile named '{name}'.[/red] Try 'openapi-cli4ai catalog search {name}'.")
+        raise typer.Exit(1)
+    profile = _catalog_to_profile(entry)
+    tier = entry.get("_tier", "community")
+    style = "bold green" if tier == "verified" else "yellow"
+    lines = [
+        f"[cyan]{entry.get('_slug')}[/cyan]  [{style}]{tier}[/{style}]",
+        str(entry.get("description", "")),
+        "",
+        f"[dim]Base URL[/dim]   {profile.get('base_url', '')}",
+        f"[dim]Spec[/dim]       {profile.get('openapi_url') or profile.get('openapi_path', '')}",
+        f"[dim]Auth[/dim]       {_auth_summary(entry.get('auth', {}))}",
+        f"[dim]Source[/dim]     {entry.get('source', '')}",
+        f"[dim]Maintainer[/dim] @{entry.get('maintainer', '')}",
+    ]
+    console.print(Panel("\n".join(lines), border_style="cyan", title=f"catalog: {entry.get('_slug')}"))
+    console.print(f"[dim]Install:[/dim] openapi-cli4ai catalog install {entry.get('_slug')}")
+
+
+@catalog_app.command("install")
+def cmd_catalog_install(
+    name: Annotated[str, typer.Argument(help="Catalog profile name")],
+    use: Annotated[bool, typer.Option("--use", help="Set as the active profile")] = False,
+    force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite an existing profile")] = False,
+) -> None:
+    """Install a catalog profile into your config."""
+    entry = _catalog_find(name)
+    if entry is None:
+        err_console.print(f"[red]No catalog profile named '{name}'.[/red] Try 'openapi-cli4ai catalog search {name}'.")
+        raise typer.Exit(1)
+    slug = str(entry.get("_slug"))
+
+    data = load_profiles()
+    profiles = data.setdefault("profiles", {})
+    if slug in profiles and not force:
+        if not typer.confirm(f"Profile '{slug}' already exists. Overwrite?"):
+            raise typer.Exit(0)
+
+    profiles[slug] = _catalog_to_profile(entry)
+    if use or not data.get("active_profile"):
+        data["active_profile"] = slug
+    became_active = data.get("active_profile") == slug
+    save_profiles(data)
+
+    console.print(f"[green]✓ Added profile '{slug}' to {CONFIG_FILE}[/green]")
+    if entry.get("_tier") != "verified":
+        console.print("  [dim](community profile — not maintainer-verified)[/dim]")
+
+    # Accurate, ordered next steps. There is no per-command --profile flag;
+    # a profile is selected by being active (or via the OAC_PROFILE env var).
+    auth = entry.get("auth", {})
+    step = 1
+    if not became_active:
+        console.print(f"  [yellow]{step}.[/yellow] Activate it: [cyan]openapi-cli4ai profile use {slug}[/cyan]")
+        step += 1
+    for var in _auth_env_vars(auth):
+        console.print(f"  [yellow]{step}.[/yellow] Set your credential: [cyan]export {var}=...[/cyan]")
+        step += 1
+    if _auth_uses_login(auth):
+        console.print(f"  [yellow]{step}.[/yellow] Sign in: [cyan]openapi-cli4ai login[/cyan]")
+        step += 1
+    console.print(f"  [yellow]{step}.[/yellow] Try it: [cyan]openapi-cli4ai endpoints[/cyan]")
+
+
+def _gh_annotate(level: str, file: str, msg: str) -> None:
+    """Emit a GitHub Actions annotation so validation errors show on the PR diff."""
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::{level} file={file}::{msg}")
+
+
+@catalog_app.command("validate")
+def cmd_catalog_validate(
+    path: Annotated[Optional[str], typer.Argument(help="Profile TOML file to validate")] = None,
+    validate_all: Annotated[bool, typer.Option("--all", help="Validate every profile in the catalog")] = False,
+    offline: Annotated[bool, typer.Option("--offline", help="Skip the live OpenAPI spec fetch")] = False,
+) -> None:
+    """Validate a catalog profile: fields, ownership, secrets, and a live spec fetch."""
+    items: list[tuple[str, dict]] = []
+    if validate_all:
+        for entry in _load_catalog():
+            items.append((f"profiles/{entry.get('_tier')}/{entry.get('_slug')}.toml", entry))
+    elif path:
+        target = Path(path)
+        try:
+            entry = tomllib.loads(target.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            err_console.print(f"[red]Cannot read {path}: {exc}[/red]")
+            raise typer.Exit(1)
+        entry.setdefault("_slug", target.stem)
+        items.append((path, entry))
+    else:
+        err_console.print("[red]Provide a profile file path, or --all.[/red]")
+        raise typer.Exit(1)
+
+    if not items:
+        console.print("[dim]No profiles to validate.[/dim]")
+        return
+
+    failed = False
+    for label, entry in items:
+        errors, warnings = _validate_catalog_entry(entry, check_spec=not offline)
+        for warn in warnings:
+            console.print(f"[yellow]warn[/yellow] {label}: {warn}")
+            _gh_annotate("warning", label, warn)
+        if errors:
+            failed = True
+            for err in errors:
+                err_console.print(f"[red]error[/red] {label}: {err}")
+                _gh_annotate("error", label, err)
+            console.print(f"[red]FAIL[/red] {label}")
+        else:
+            console.print(f"[green]OK[/green]   {label}" + ("  (warnings)" if warnings else ""))
+
+    if failed:
+        console.print("\n[red]Profile validation failed.[/red]")
+        raise typer.Exit(1)
+    console.print(f"\n[green]Validated {len(items)} profile(s).[/green]")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────

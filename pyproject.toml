@@ -52,6 +52,11 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/openapi_cli4ai"]
 
+# Bundle the profile catalog into the wheel so `catalog` commands work offline.
+[tool.hatch.build.targets.wheel.force-include]
+"profiles/verified" = "openapi_cli4ai/_catalog/verified"
+"profiles/community" = "openapi_cli4ai/_catalog/community"
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"

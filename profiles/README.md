@@ -1,13 +1,19 @@
 # Profile catalog
 
-A community catalog of ready-made **profiles** for public APIs. A profile is
-just the small bit of config `openapi-cli4ai` needs to talk to an API: a base
-URL, where to find its OpenAPI spec, and how it authenticates.
+Ready-made **profiles** for public APIs. A profile is the small bit of config
+`openapi-cli4ai` needs to talk to an API: a base URL, where its OpenAPI spec
+lives, and how it authenticates. The catalog is bundled into the package, so
+these commands work offline:
 
-> **Status: Phase 1 (scaffolding).** This directory establishes the format,
-> validation, and governance. A CLI command to browse and install these
-> profiles (`openapi-cli4ai profile install <name>`) is planned but not built
-> yet — for now these files are a reviewed, validated reference.
+```bash
+openapi-cli4ai catalog search cov       # find profiles
+openapi-cli4ai catalog show codecov     # preview one
+openapi-cli4ai catalog install codecov  # add it to your config, with next steps
+```
+
+`install` maps the catalog entry into your `~/.openapi-cli4ai.toml`, tells you
+exactly which environment variable to set for auth, and hands you the next
+command — no docs required.
 
 ## Tiers
 
@@ -16,16 +22,15 @@ a **tier**, shown next to every entry, not a gate on being listed.
 
 | Tier | Directory | What it means |
 | --- | --- | --- |
-| **Verified** | `verified/` | A maintainer has confirmed the spec loads and the auth flow works. |
+| **Verified** | `verified/` | A maintainer confirmed the spec loads and the auth flow works. |
 | **Community** | `community/` | Contributed via PR and passed automated validation. Not manually vetted. |
 
-New submissions go to `community/`. A maintainer may promote a profile to
+New submissions go to `community/`; a maintainer may promote a profile to
 `verified/` after checking it end to end.
 
 ## Profile format
 
-One profile per file, named `<slug>.toml`, matching this shape (see
-[`profile.schema.json`](profile.schema.json) for the full contract):
+One profile per file, named `<slug>.toml`:
 
 ```toml
 name = "example"                        # must match the file name
@@ -48,19 +53,17 @@ each auth type.
 
 ## Contributing a profile
 
-1. Copy the format above into `community/<slug>.toml`.
+1. Create `community/<slug>.toml` in the format above.
 2. Reference secrets only via `*_env_var` fields — **never commit a token**.
-3. Keep `description` factual. Promotional copy will be flagged and the PR
-   closed without review.
-4. `source` must be the API's own developer/docs URL (same registrable domain
-   as `base_url`) — this is a lightweight ownership check.
+3. Keep `description` factual. `source` must be the API's own developer/docs
+   URL (same registrable domain as `base_url`).
 
-Validate locally before opening the PR:
+Validate before opening the PR — the CLI is the single source of truth:
 
 ```bash
-uv run --with jsonschema python scripts/validate_profiles.py
+uv run openapi-cli4ai catalog validate profiles/community/<slug>.toml
 ```
 
-CI runs the same check on every PR touching `profiles/**`. It verifies the
-schema, that the OpenAPI spec is reachable and parseable, the ownership
-heuristic, and that no secrets are inlined.
+CI runs `catalog validate --all` on every PR touching `profiles/`, checking the
+fields, a live OpenAPI spec fetch, the ownership heuristic, and that no secrets
+are inlined. Errors are posted inline on the PR.
