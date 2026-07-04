@@ -8,7 +8,7 @@ import json
 import time
 
 import pytest
-from click.exceptions import Exit as ClickExit
+from typer import Exit as ClickExit
 
 
 def test_oidc_auth_returns_cached_token(cli_module, tmp_config):

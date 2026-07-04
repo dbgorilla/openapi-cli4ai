@@ -11,7 +11,7 @@ from __future__ import annotations
 import inspect
 from unittest.mock import MagicMock, patch
 
-import click.exceptions
+import typer
 import httpx
 import pytest
 
@@ -65,7 +65,7 @@ class TestTokenExchangeHardening:
         mock_ctx.__exit__ = MagicMock(return_value=False)
 
         with patch.object(cli_module, "_make_client", return_value=mock_ctx):
-            with pytest.raises(click.exceptions.Exit):
+            with pytest.raises(typer.Exit):
                 cli_module._token_exchange(
                     {"access_token": "tok"},
                     auth_config,
@@ -128,7 +128,7 @@ class TestDeviceLoginHardening:
             patch.object(cli_module, "_device_discover_endpoints", return_value=endpoints),
             patch.object(cli_module, "_make_client", return_value=mock_ctx),
         ):
-            with pytest.raises(click.exceptions.Exit):
+            with pytest.raises(typer.Exit):
                 cli_module._device_login(auth_config, "test-profile", profile)
 
 

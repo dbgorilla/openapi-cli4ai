@@ -11,7 +11,7 @@ import stat
 import urllib.parse
 from unittest.mock import patch
 
-import click
+import typer
 import pytest
 from typer.testing import CliRunner
 
@@ -317,7 +317,7 @@ class TestOIDCStateValidation:
         # Mock typer.prompt to return a URL with wrong state
         wrong_url = "http://localhost:8484/callback?code=abc123&state=WRONG"
         with patch("typer.prompt", return_value=wrong_url):
-            with pytest.raises(click.exceptions.Exit):
+            with pytest.raises(typer.Exit):
                 cli_mod._oidc_login_no_browser("http://auth.example.com", expected_state="CORRECT")
 
     def test_no_browser_accepts_correct_state(self):
@@ -331,7 +331,7 @@ class TestOIDCStateValidation:
         """_oidc_login_no_browser should reject a redirect URL with no state."""
         no_state_url = "http://localhost:8484/callback?code=abc123"
         with patch("typer.prompt", return_value=no_state_url):
-            with pytest.raises(click.exceptions.Exit):
+            with pytest.raises(typer.Exit):
                 cli_mod._oidc_login_no_browser("http://auth.example.com", expected_state="EXPECTED")
 
 
@@ -489,7 +489,7 @@ class TestProfileFallbackWarning:
             }
         )
         monkeypatch.setenv("OAC_PROFILE", "nonexistent")
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             cli.get_active_profile()
         captured = capsys.readouterr()
         assert "not found" in captured.err.lower()
@@ -635,21 +635,21 @@ class TestConfigCorruption:
         """A corrupt TOML config should exit with error, not silently return empty."""
         cli, config_path, cache_dir = tmp_config
         cli.CONFIG_FILE.write_text("this is not valid toml {{{")
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             cli.load_profiles()
 
     def test_wrong_shape_profiles_exits(self, tmp_config):
         """Config with profiles = 'string' should exit, not crash."""
         cli, config_path, cache_dir = tmp_config
         cli.CONFIG_FILE.write_text('profiles = "oops"\n')
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             cli.load_profiles()
 
     def test_wrong_shape_nested_profile_exits(self, tmp_config):
         """Config with [profiles] bad = 'string' should exit, not crash."""
         cli, config_path, cache_dir = tmp_config
         cli.CONFIG_FILE.write_text('[profiles]\nbad = "oops"\n')
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(typer.Exit):
             cli.get_active_profile()
 
 
