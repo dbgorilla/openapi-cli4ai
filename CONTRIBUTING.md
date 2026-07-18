@@ -37,6 +37,23 @@ pytest tests/ -m "not integration" -v
 4. Commit with a clear message
 5. Push and open a PR
 
+## Contributing a Profile to the Catalog
+
+`openapi-cli4ai` ships a community catalog of ready-made API profiles under
+[`profiles/`](profiles/README.md). To add one:
+
+1. Create `profiles/community/<slug>.toml` following the format in
+   [`profiles/README.md`](profiles/README.md).
+2. Reference secrets only via `*_env_var` fields — never commit a token.
+3. Keep the `description` factual. `source` must be the API's own developer or
+   docs URL (same domain as `base_url`).
+4. Validate locally: `uv run openapi-cli4ai catalog validate profiles/community/<slug>.toml`
+
+CI runs `catalog validate --all` on every PR touching `profiles/`, checking the
+fields, a live spec fetch, ownership, and absence of inline secrets — errors
+appear inline on the PR. Profiles that are primarily promotional will be closed
+without review.
+
 ## Reporting Issues
 
 Open an issue on GitHub. Include:
