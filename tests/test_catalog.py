@@ -89,6 +89,12 @@ def test_validate_rejects_bad_auth_type(cli_module):
     assert any("auth.type" in e for e in errors)
 
 
+def test_validate_rejects_api_key_without_env_var(cli_module):
+    entry = _good_entry(auth={"type": "api-key", "header": "x-api-key"})
+    errors, _ = cli_module._validate_catalog_entry(entry, check_spec=False)
+    assert any("auth.env_var" in e for e in errors)
+
+
 def test_validate_warns_on_promo(cli_module):
     entry = _good_entry(description="The best fastest API")
     errors, warnings = cli_module._validate_catalog_entry(entry, check_spec=False)
