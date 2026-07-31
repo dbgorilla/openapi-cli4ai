@@ -46,6 +46,10 @@ dev = [
     "pytest>=8",
     "pytest-cov>=5",
     "click>=8,<9",
+    # ruff pinned <0.16: 0.16 stabilized RUF059 (and others) that flag ~450
+    # existing lines. CI runs the locked ruff (uv run) instead of uvx-latest so
+    # lint is deterministic; a future bump comes via Dependabot and is gated by CI.
+    "ruff>=0.15,<0.16",
     "mypy>=1.10,<3",
     "types-PyYAML>=6,<7",
 ]
