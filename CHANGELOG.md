@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] - 2026-07-31
+
+### Added
+
+- **Profile catalog** — browse and install ready-made API profiles: `catalog search` / `show` / `list` / `install` / `validate`. Bundled into the wheel, so it works offline, with two trust tiers (`verified` / `community`) (#25)
+- Global `--profile` / `-p` flag to select a profile for a single invocation (precedence: flag > `OAC_PROFILE` > active profile) (#25)
+- Community-contributed profile: Xquik (#23)
+
+### Changed
+
+- Dependency updates: `typer` 0.27, `mypy` 2.3, `types-PyYAML`, and the GitHub Actions group (#38, #37)
+- Pin `ruff` and run the locked version in CI so lint is deterministic (no more `uvx`-latest drift) (#39)
+
+### Security
+
+- Catalog validation hardening: SSRF guard on spec fetches (rejects cloud-metadata/private/loopback hosts, pre- and post-redirect), Public Suffix List domain-ownership check, spec size/redirect/timeout limits, prompt-injection scan of descriptions, and an explicit confirmation before installing unverified community profiles (#25)
+
 ## [0.5.1] - 2026-07-04
 
 ### Fixed
