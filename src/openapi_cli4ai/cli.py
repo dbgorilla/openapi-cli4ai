@@ -3025,6 +3025,8 @@ def _validate_catalog_entry(entry: dict, *, check_spec: bool) -> tuple[list[str]
     if not isinstance(auth, dict) or auth.get("type") not in _CATALOG_AUTH_TYPES:
         errors.append(f"auth.type must be one of: {', '.join(_CATALOG_AUTH_TYPES)}")
     else:
+        if auth.get("type") == "api-key" and not auth.get("env_var"):
+            errors.append("auth.env_var is required for api-key profiles")
         for key, value in auth.items():
             if key.lower() in _CATALOG_SECRET_KEYS and isinstance(value, str):
                 errors.append(f"auth.{key} looks like an inline secret; reference an *_env_var instead")

@@ -1,0 +1,11 @@
+name = "xquik"
+description = "Xquik REST API"
+maintainer = "kriptoburak"
+source = "https://xquik.com"
+base_url = "https://xquik.com"
+openapi_url = "https://xquik.com/openapi.json"
+
+[auth]
+type = "api-key"
+env_var = "XQUIK_API_KEY"
+header = "x-api-key"
