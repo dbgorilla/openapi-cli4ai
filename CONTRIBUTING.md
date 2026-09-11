@@ -53,10 +53,13 @@ pytest tests/ -m "not integration" -v
 3. Keep the `description` factual. `source` must be the API's own developer or
    docs URL (same domain as `base_url`).
 4. Validate locally: `uv run openapi-cli4ai catalog validate profiles/community/<slug>.toml`
+5. Regenerate the index and commit it: `uv run openapi-cli4ai catalog index`
 
-CI runs `catalog validate --all` on every PR touching `profiles/`, checking the
-fields, a live spec fetch, ownership, and absence of inline secrets — errors
-appear inline on the PR. Profiles that are primarily promotional will be closed
+CI runs `catalog validate --all` and `catalog index --check` on every PR touching
+`profiles/`, checking the fields, a live spec fetch, ownership, absence of inline
+secrets, and that `profiles/index.json` is current — errors appear inline on the
+PR. Once merged, the profile is visible to every installed CLI within an hour
+via the remote index (see `profiles/README.md`, "Freshness"). Profiles that are primarily promotional will be closed
 without review.
 
 ## Reporting Issues

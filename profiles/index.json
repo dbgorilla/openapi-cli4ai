@@ -1,0 +1,33 @@
+{
+  "profiles": [
+    {
+      "auth": {
+        "env_var": "XQUIK_API_KEY",
+        "header": "x-api-key",
+        "type": "api-key"
+      },
+      "base_url": "https://xquik.com",
+      "description": "Xquik REST API",
+      "maintainer": "kriptoburak",
+      "name": "xquik",
+      "openapi_url": "https://xquik.com/openapi.json",
+      "slug": "xquik",
+      "source": "https://xquik.com",
+      "tier": "community"
+    },
+    {
+      "auth": {
+        "type": "none"
+      },
+      "base_url": "https://petstore3.swagger.io/api/v3",
+      "description": "Swagger Petstore \u2014 the OpenAPI 3 sample API",
+      "maintainer": "dbgorilla",
+      "name": "petstore",
+      "openapi_url": "https://petstore3.swagger.io/api/v3/openapi.json",
+      "slug": "petstore",
+      "source": "https://petstore3.swagger.io",
+      "tier": "verified"
+    }
+  ],
+  "version": 1
+}

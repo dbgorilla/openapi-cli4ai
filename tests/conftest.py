@@ -13,6 +13,12 @@ from openapi_cli4ai import config as config_mod
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _catalog_offline(monkeypatch):
+    """Tests never fetch the remote catalog index; the remote-path tests unset this."""
+    monkeypatch.setenv("OAC_CATALOG_OFFLINE", "1")
+
+
 @pytest.fixture
 def petstore_spec() -> dict:
     """Load the Petstore OpenAPI spec fixture."""

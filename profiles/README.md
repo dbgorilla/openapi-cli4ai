@@ -3,7 +3,8 @@
 Ready-made **profiles** for public APIs. A profile is the small bit of config
 `openapi-cli4ai` needs to talk to an API: a base URL, where its OpenAPI spec
 lives, and how it authenticates. The catalog is bundled into the package, so
-these commands work offline:
+these commands work offline; when online they also pick up profiles merged to
+`main` since your release (see [Freshness](#freshness)):
 
 ```bash
 openapi-cli4ai catalog search cov            # find profiles
@@ -31,6 +32,19 @@ New submissions go to `community/`; a maintainer may promote a profile to
 prompts for confirmation (it shows the `base_url` your credentials would be
 sent to); **verified** profiles install without a prompt. Use `--yes` to skip
 the prompt in scripts.
+
+## Freshness
+
+The bundled catalog is the offline baseline. On top of it, `catalog list`,
+`search`, `show` and `install` fetch [`index.json`](index.json) from this
+repository's `main` branch (3 s timeout, cached for an hour under
+`~/.cache/openapi-cli4ai/`) and merge it in, so a profile is usable as soon as
+its PR merges. Any failure falls back to the cached index, then to the bundled
+copy, silently. Every remote entry is re-checked with the offline validator
+before use; a bad one is skipped. Set `OAC_CATALOG_OFFLINE=1` to never fetch.
+
+`index.json` is generated from the TOML files by `openapi-cli4ai catalog index`
+and committed; CI fails a PR whose index is stale.
 
 ## Profile format
 
@@ -62,10 +76,12 @@ each auth type.
 3. Keep `description` factual. `source` must be the API's own developer/docs
    URL (same registrable domain as `base_url`).
 
-Validate before opening the PR — the CLI is the single source of truth:
+Validate before opening the PR — the CLI is the single source of truth — and
+regenerate the index:
 
 ```bash
 uv run openapi-cli4ai catalog validate profiles/community/<slug>.toml
+uv run openapi-cli4ai catalog index
 ```
 
 CI runs `catalog validate --all` on every PR touching `profiles/`. It checks the
