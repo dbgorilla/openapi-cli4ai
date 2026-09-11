@@ -311,3 +311,35 @@ def test_verified_install_no_confirmation(tmp_config):
     result = runner.invoke(app, ["catalog", "install", "petstore"])
     assert result.exit_code == 0
     assert "Verified profile" in result.output
+
+
+# ── install --dry-run (#29) ──────────────────────────────────────────────────
+
+
+def test_catalog_install_dry_run_prints_toml_and_writes_nothing(tmp_config):
+    mod, _tmp_path, _cache_dir = tmp_config
+    result = runner.invoke(app, ["catalog", "install", "petstore", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    # the exact runtime block, with catalog-only metadata stripped
+    assert "[profiles.petstore]" in result.output
+    assert 'base_url = "https://petstore3.swagger.io/api/v3"' in result.output
+    assert "maintainer" not in result.output and "description" not in result.output
+    assert "Nothing changed" in result.output
+    # no file writes
+    assert not mod.CONFIG_FILE.exists()
+
+
+def test_catalog_install_dry_run_skips_community_prompt(tmp_config, monkeypatch):
+    mod, _tmp_path, _cache_dir = tmp_config
+    entry = _good_entry(_tier="community")
+    monkeypatch.setattr(mod, "_catalog_find", lambda _name: entry)
+    # No --yes and no input: a prompt would abort with a non-zero exit.
+    result = runner.invoke(app, ["catalog", "install", "demo", "--dry-run"], input="")
+    assert result.exit_code == 0, result.output
+    assert "[profiles.demo]" in result.output
+    assert not mod.CONFIG_FILE.exists()
+
+
+def test_catalog_install_dry_run_unknown_still_errors(tmp_config):
+    result = runner.invoke(app, ["catalog", "install", "nope", "--dry-run"])
+    assert result.exit_code == 1
