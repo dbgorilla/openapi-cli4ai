@@ -2769,7 +2769,16 @@ def cmd_profile_remove(
     if name not in data.get("profiles", {}):
         err_console.print(f"[red]Profile '{name}' not found.[/red]")
         raise typer.Exit(1)
+    _remove_profile(name, force)
 
+
+def _remove_profile(name: str, force: bool) -> None:
+    """Delete profile `name` from config plus its cached spec and token.
+
+    Shared by `profile remove` and `catalog uninstall`. Caller has checked
+    the profile exists.
+    """
+    data = load_profiles()
     if not force and not typer.confirm(f"Remove profile '{name}'?"):
         raise typer.Exit(0)
 
@@ -3197,6 +3206,21 @@ def cmd_catalog_install(
         console.print(f"  [yellow]{step}.[/yellow] Sign in: [cyan]openapi-cli4ai --profile {slug} login[/cyan]")
         step += 1
     console.print(f"  [yellow]{step}.[/yellow] Try it: [cyan]openapi-cli4ai --profile {slug} endpoints[/cyan]")
+
+
+@catalog_app.command("uninstall")
+def cmd_catalog_uninstall(
+    name: Annotated[str, typer.Argument(help="Catalog profile name")],
+    force: Annotated[bool, typer.Option("--force", "-f", help="Skip confirmation")] = False,
+) -> None:
+    """Remove an installed catalog profile and its cached spec and token."""
+    # Accept either the catalog name or the installed slug; they are usually the same.
+    entry = _catalog_find(name)
+    slug = str(entry.get("_slug")) if entry else name
+    if slug not in load_profiles().get("profiles", {}):
+        err_console.print(f"[red]Profile '{slug}' is not installed.[/red] See 'openapi-cli4ai profile list'.")
+        raise typer.Exit(1)
+    _remove_profile(slug, force)
 
 
 def _gh_annotate(level: str, file: str, msg: str) -> None:

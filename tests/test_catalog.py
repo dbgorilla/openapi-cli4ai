@@ -343,3 +343,44 @@ def test_catalog_install_dry_run_skips_community_prompt(tmp_config, monkeypatch)
 def test_catalog_install_dry_run_unknown_still_errors(tmp_config):
     result = runner.invoke(app, ["catalog", "install", "nope", "--dry-run"])
     assert result.exit_code == 1
+
+
+# ── uninstall (#32) ─────────────────────────────────────────────────────────
+
+
+def test_catalog_uninstall_removes_profile_and_caches(tmp_config):
+    mod, _tmp_path, cache_dir = tmp_config
+    assert runner.invoke(app, ["catalog", "install", "petstore"]).exit_code == 0
+    # Simulate a cached token and spec from prior use.
+    token = cache_dir / f"{mod._safe_profile_name('petstore')}_token.json"
+    token.write_text("{}")
+    prof = mod._resolve_env_vars(mod.load_profiles()["profiles"]["petstore"])
+    prof["_name"] = "petstore"
+    spec_cache, spec_meta = mod._spec_cache_paths(mod._resolve_spec_url(prof))
+    spec_cache.parent.mkdir(parents=True, exist_ok=True)
+    spec_cache.write_text("{}")
+    spec_meta.write_text("{}")
+
+    result = runner.invoke(app, ["catalog", "uninstall", "petstore", "--force"])
+    assert result.exit_code == 0, result.output
+    assert "petstore" not in mod.load_profiles().get("profiles", {})
+    assert not token.exists() and not spec_cache.exists() and not spec_meta.exists()
+
+
+def test_catalog_uninstall_prompts_and_keeps_on_no(tmp_config):
+    mod, _tmp_path, _cache_dir = tmp_config
+    assert runner.invoke(app, ["catalog", "install", "petstore"]).exit_code == 0
+    result = runner.invoke(app, ["catalog", "uninstall", "petstore"], input="n\n")
+    assert result.exit_code == 0
+    assert "petstore" in mod.load_profiles()["profiles"]
+
+
+def test_catalog_uninstall_not_installed(tmp_config):
+    result = runner.invoke(app, ["catalog", "uninstall", "petstore"])
+    assert result.exit_code == 1
+    assert "not installed" in result.output
+
+
+def test_catalog_uninstall_unknown_name(tmp_config):
+    result = runner.invoke(app, ["catalog", "uninstall", "nope", "--force"])
+    assert result.exit_code == 1
