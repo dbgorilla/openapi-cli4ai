@@ -51,6 +51,9 @@ dev = [
     "ruff>=0.15,<0.17",
     "mypy>=1.10,<3",
     "types-PyYAML>=6,<7",
+    # DNS TXT domain verification in `catalog validate` (CI + contributors);
+    # end users never resolve DNS, so this is not a runtime dependency.
+    "dnspython>=2.4,<3",
 ]
 
 [tool.hatch.build.targets.wheel]

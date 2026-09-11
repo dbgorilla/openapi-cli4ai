@@ -2760,6 +2760,12 @@ def cmd_catalog_show(
         f"[dim]Auth[/dim]       {_auth_summary(entry.get('auth', {}))}",
         f"[dim]Source[/dim]     {entry.get('source', '')}",
         f"[dim]Maintainer[/dim] @{entry.get('maintainer', '')}",
+        "[dim]Domain[/dim]     "
+        + (
+            "[bold blue]✓ verified[/bold blue] (DNS TXT record names the maintainer)"
+            if entry.get("domain_verified") is True
+            else "not verified"
+        ),
     ]
     console.print(Panel("\n".join(lines), border_style="cyan", title=f"catalog: {entry.get('_slug')}"))
     console.print(f"[dim]Install:[/dim] openapi-cli4ai catalog install {entry.get('_slug')}")
