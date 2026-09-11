@@ -70,6 +70,7 @@ from openapi_cli4ai.catalog import (
     _render_catalog,
 )
 from openapi_cli4ai.config import (
+    _PROFILE_FILES_KEY,
     APP_NAME,
     CACHE_DIR,
     CACHE_TTL,
@@ -82,6 +83,7 @@ from openapi_cli4ai.config import (
     ensure_dirs,
     get_active_profile,
     load_profiles,
+    profile_file_path,
     save_profiles,
 )
 from openapi_cli4ai.validator import _gh_annotate, _validate_catalog_entry
@@ -2783,9 +2785,13 @@ def cmd_catalog_install(
     if dry_run:
         # Nothing is written, so the community opt-in prompt is not needed:
         # the point of a dry run is to inspect the endpoint and auth shape
-        # before deciding. Print the exact block `save_profiles` would emit.
-        block = tomli_w.dumps({"profiles": {slug: _catalog_to_profile(entry)}}).strip()
-        console.print(f"[dim]# dry run: {tier} profile '{slug}' — would be written to {CONFIG_FILE}[/dim]")
+        # before deciding. Print the exact file `save_profiles` would emit.
+        block = tomli_w.dumps(_catalog_to_profile(entry)).strip()
+        # soft_wrap: never break a file path across lines
+        console.print(
+            f"[dim]# dry run: {tier} profile '{slug}' — would be written to {profile_file_path(slug)}[/dim]",
+            soft_wrap=True,
+        )
         # Text(): TOML table headers like [profiles.x] are not Rich markup. soft_wrap
         # keeps long lines intact so the output can be pasted straight into config.
         console.print(Text(block), soft_wrap=True)
@@ -2819,13 +2825,19 @@ def cmd_catalog_install(
         raise typer.Exit(0)
 
     profiles[slug] = _catalog_to_profile(entry)
+    # Catalog installs are drop-ins: one file per profile, so install, upgrade
+    # and uninstall touch only that file. Marking it here also drops any
+    # same-named [profiles.x] entry from the config file on save (the user
+    # just agreed to overwrite it).
+    target = profile_file_path(slug)
+    data.setdefault(_PROFILE_FILES_KEY, {})[slug] = target
     if use or not data.get("active_profile"):
         data["active_profile"] = slug
     save_profiles(data)
 
     verified = tier == "verified"
     badge = "[green]✓ Verified profile[/green]" if verified else "[yellow]community profile[/yellow]"
-    console.print(f"[green]✓ Added profile '{slug}'[/green] ({badge}) to {CONFIG_FILE}")
+    console.print(f"[green]✓ Added profile '{slug}'[/green] ({badge}) to {target}", soft_wrap=True)
 
     # Next steps use --profile so they work regardless of the active profile.
     auth = entry.get("auth", {})

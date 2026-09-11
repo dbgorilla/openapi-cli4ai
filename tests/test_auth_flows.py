@@ -866,7 +866,7 @@ class TestLoadProfiles:
         mod, tmp_path, cache_dir = tmp_config
         # CONFIG_FILE doesn't exist yet
         result = mod.load_profiles()
-        assert result == {"active_profile": None, "profiles": {}}
+        assert result == {"active_profile": None, "profiles": {}, "_profile_files": {}}
 
     def test_valid_toml(self, tmp_config):
         mod, tmp_path, cache_dir = tmp_config

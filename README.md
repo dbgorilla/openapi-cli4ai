@@ -208,6 +208,8 @@ openapi-cli4ai logout
 
 Profiles are stored in `~/.openapi-cli4ai.toml`. Secrets are referenced via environment variables — never stored in the config file.
 
+Profiles can also live one-per-file under `~/.openapi-cli4ai/profiles.d/<name>.toml`, where the file holds the profile's keys directly (no `[profiles.<name>]` header) and the file name is the profile name. `catalog install` writes there so installing, upgrading and uninstalling a profile touch only that file. Both locations are read; a drop-in overrides a same-named entry in `~/.openapi-cli4ai.toml`. `active_profile` is only read from `~/.openapi-cli4ai.toml`.
+
 ```toml
 active_profile = "myapi"
 

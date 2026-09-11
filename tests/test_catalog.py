@@ -321,8 +321,8 @@ def test_catalog_install_dry_run_prints_toml_and_writes_nothing(tmp_config):
     mod, _tmp_path, _cache_dir = tmp_config
     result = runner.invoke(app, ["catalog", "install", "petstore", "--dry-run"])
     assert result.exit_code == 0, result.output
-    # the exact runtime block, with catalog-only metadata stripped
-    assert "[profiles.petstore]" in result.output
+    # the exact drop-in file, with catalog-only metadata stripped
+    assert "profiles.d" in result.output and "petstore.toml" in result.output
     assert 'base_url = "https://petstore3.swagger.io/api/v3"' in result.output
     assert "maintainer" not in result.output and "description" not in result.output
     assert "Nothing changed" in result.output
@@ -337,7 +337,7 @@ def test_catalog_install_dry_run_skips_community_prompt(tmp_config, monkeypatch)
     # No --yes and no input: a prompt would abort with a non-zero exit.
     result = runner.invoke(app, ["catalog", "install", "demo", "--dry-run"], input="")
     assert result.exit_code == 0, result.output
-    assert "[profiles.demo]" in result.output
+    assert "demo.toml" in result.output
     assert not mod.CONFIG_FILE.exists()
 
 
