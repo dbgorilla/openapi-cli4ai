@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer import Exit as ClickExit
 
-
 # ── Device flow endpoint discovery ────────────────────────────────────────────
 
 

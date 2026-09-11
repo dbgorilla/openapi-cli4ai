@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from openapi_cli4ai import cli as cli_mod
 
-
 # ── allOf Tests ──────────────────────────────────────────────────────────────
 
 

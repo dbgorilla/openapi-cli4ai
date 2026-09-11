@@ -11,10 +11,9 @@ from __future__ import annotations
 import inspect
 from unittest.mock import MagicMock, patch
 
-import typer
 import httpx
 import pytest
-
+import typer
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -64,13 +63,12 @@ class TestTokenExchangeHardening:
         mock_ctx.post = MagicMock(side_effect=httpx.ReadTimeout("Read timed out"))
         mock_ctx.__exit__ = MagicMock(return_value=False)
 
-        with patch.object(cli_module, "_make_client", return_value=mock_ctx):
-            with pytest.raises(typer.Exit):
-                cli_module._token_exchange(
-                    {"access_token": "tok"},
-                    auth_config,
-                    "https://api.example.com",
-                )
+        with patch.object(cli_module, "_make_client", return_value=mock_ctx), pytest.raises(typer.Exit):
+            cli_module._token_exchange(
+                {"access_token": "tok"},
+                auth_config,
+                "https://api.example.com",
+            )
 
 
 # ── VAL-AUTH-006: _device_login catches httpx.HTTPError ──────────────────────
@@ -127,9 +125,9 @@ class TestDeviceLoginHardening:
         with (
             patch.object(cli_module, "_device_discover_endpoints", return_value=endpoints),
             patch.object(cli_module, "_make_client", return_value=mock_ctx),
+            pytest.raises(typer.Exit),
         ):
-            with pytest.raises(typer.Exit):
-                cli_module._device_login(auth_config, "test-profile", profile)
+            cli_module._device_login(auth_config, "test-profile", profile)
 
 
 # ── VAL-AUTH-007: _inject_token uses _safe_profile_name ──────────────────────

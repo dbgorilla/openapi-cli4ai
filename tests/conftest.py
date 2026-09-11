@@ -9,7 +9,6 @@ import pytest
 
 from openapi_cli4ai import cli as cli_mod
 
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 

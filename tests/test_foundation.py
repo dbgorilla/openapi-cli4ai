@@ -3,6 +3,8 @@
 Verifies that all new globals, imports, and helper functions exist in cli.py.
 """
 
+from typing import ClassVar
+
 import httpx
 import pytest
 
@@ -39,7 +41,7 @@ class TestFoundationGlobals:
 class TestFoundationHelperFunctions:
     """VAL-FOUND-002: All 11 helper functions defined."""
 
-    EXPECTED_FUNCTIONS = [
+    EXPECTED_FUNCTIONS: ClassVar[list[str]] = [
         "_redact_headers",
         "_verbose",
         "_make_client",

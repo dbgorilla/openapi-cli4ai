@@ -13,7 +13,6 @@ from typer import Exit as ClickExit
 
 from openapi_cli4ai import cli as cli_mod
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -514,15 +513,13 @@ class TestOidcLoginNoBrowser:
 
     def test_redirect_url_with_error(self):
         redirect_url = "http://localhost:8484/callback?error=access_denied"
-        with patch("typer.prompt", return_value=redirect_url):
-            with pytest.raises((SystemExit, ClickExit)):
-                cli_mod._oidc_login_no_browser("https://idp/auth?...")
+        with patch("typer.prompt", return_value=redirect_url), pytest.raises((SystemExit, ClickExit)):
+            cli_mod._oidc_login_no_browser("https://idp/auth?...")
 
     def test_redirect_url_without_code(self):
         redirect_url = "http://localhost:8484/callback?state=s123"
-        with patch("typer.prompt", return_value=redirect_url):
-            with pytest.raises((SystemExit, ClickExit)):
-                cli_mod._oidc_login_no_browser("https://idp/auth?...")
+        with patch("typer.prompt", return_value=redirect_url), pytest.raises((SystemExit, ClickExit)):
+            cli_mod._oidc_login_no_browser("https://idp/auth?...")
 
 
 # ===========================================================================

@@ -10,11 +10,10 @@ import inspect
 import socket
 from unittest.mock import MagicMock, patch
 
-import typer
 import pytest
+import typer
 
 from openapi_cli4ai import cli as cli_mod
-
 
 # ── Specific Exception Tests ─────────────────────────────────────────────────
 
@@ -90,9 +89,13 @@ class TestSpecificExceptions:
         tree = ast.parse(source)
         violations = []
         for node in ast.walk(tree):
-            if isinstance(node, ast.ExceptHandler) and node.type is not None:
-                if isinstance(node.type, ast.Name) and node.type.id == "Exception":
-                    violations.append(f"Line {node.lineno}")
+            if (
+                isinstance(node, ast.ExceptHandler)
+                and node.type is not None
+                and isinstance(node.type, ast.Name)
+                and node.type.id == "Exception"
+            ):
+                violations.append(f"Line {node.lineno}")
         assert not violations, f"Found bare except Exception at: {violations}"
 
 
@@ -171,9 +174,8 @@ class TestRedundantImport:
                 for alias in node.names:
                     if alias.name == "re":
                         re_imports.append(node.lineno)
-            elif isinstance(node, ast.ImportFrom):
-                if node.module == "re":
-                    re_imports.append(node.lineno)
+            elif isinstance(node, ast.ImportFrom) and node.module == "re":
+                re_imports.append(node.lineno)
 
         assert len(re_imports) <= 1, (
             f"Found {len(re_imports)} imports of 're' at lines {re_imports}. Expected exactly 1 (top-level only)."
