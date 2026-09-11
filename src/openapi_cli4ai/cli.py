@@ -2787,7 +2787,11 @@ def cmd_catalog_install(
         # the point of a dry run is to inspect the endpoint and auth shape
         # before deciding. Print the exact file `save_profiles` would emit.
         block = tomli_w.dumps(_catalog_to_profile(entry)).strip()
-        console.print(f"[dim]# dry run: {tier} profile '{slug}' — would be written to {profile_file_path(slug)}[/dim]")
+        # soft_wrap: never break a file path across lines
+        console.print(
+            f"[dim]# dry run: {tier} profile '{slug}' — would be written to {profile_file_path(slug)}[/dim]",
+            soft_wrap=True,
+        )
         # Text(): TOML table headers like [profiles.x] are not Rich markup. soft_wrap
         # keeps long lines intact so the output can be pasted straight into config.
         console.print(Text(block), soft_wrap=True)
@@ -2833,7 +2837,7 @@ def cmd_catalog_install(
 
     verified = tier == "verified"
     badge = "[green]✓ Verified profile[/green]" if verified else "[yellow]community profile[/yellow]"
-    console.print(f"[green]✓ Added profile '{slug}'[/green] ({badge}) to {target}")
+    console.print(f"[green]✓ Added profile '{slug}'[/green] ({badge}) to {target}", soft_wrap=True)
 
     # Next steps use --profile so they work regardless of the active profile.
     auth = entry.get("auth", {})
