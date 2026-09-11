@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
 
+from openapi_cli4ai import _state
 from openapi_cli4ai import cli as cli_mod
 from openapi_cli4ai.cli import app
 
@@ -69,18 +70,18 @@ class TestVerboseMode:
 
     def test_verbose_prints_when_enabled(self, capsys):
         """_verbose() should print a message to stderr when verbose mode is on."""
-        cli_mod._verbose_mode = True
+        _state._verbose_mode = True
         try:
             cli_mod._verbose("test verbose output")
         finally:
-            cli_mod._verbose_mode = False
+            _state._verbose_mode = False
 
         captured = capsys.readouterr()
         assert "test verbose output" in captured.err
 
     def test_verbose_silent_when_disabled(self, capsys):
         """_verbose() should not print when verbose mode is off."""
-        cli_mod._verbose_mode = False
+        _state._verbose_mode = False
         cli_mod._verbose("test message")
         captured = capsys.readouterr()
         assert "test message" not in captured.err
@@ -99,14 +100,14 @@ class TestTimeoutFlag:
 
     def test_make_client_uses_timeout(self):
         """_make_client() should create a client with the configured timeout."""
-        old = cli_mod._timeout_seconds
-        cli_mod._timeout_seconds = 42.0
+        old = _state._timeout_seconds
+        _state._timeout_seconds = 42.0
         try:
             with cli_mod._make_client(verify=False) as client:
                 # Verify timeout was passed to the client (httpx stores it as a Timeout object)
                 assert client.timeout.connect == 42.0
         finally:
-            cli_mod._timeout_seconds = old
+            _state._timeout_seconds = old
 
 
 # ── Retry Tests ──────────────────────────────────────────────────────────────
@@ -127,14 +128,14 @@ class TestRetryWithBackoff:
         mock_response.status_code = 200
         mock_client.request.return_value = mock_response
 
-        old = cli_mod._max_retries
-        cli_mod._max_retries = 3
+        old = _state._max_retries
+        _state._max_retries = 3
         try:
             result = cli_mod._request_with_retry(mock_client, "GET", "http://example.com/api")
             assert result.status_code == 200
             assert mock_client.request.call_count == 1
         finally:
-            cli_mod._max_retries = old
+            _state._max_retries = old
 
     def test_retry_on_429(self):
         """429 responses should trigger retry up to max_retries."""
@@ -147,17 +148,17 @@ class TestRetryWithBackoff:
 
         mock_client.request.side_effect = [response_429, response_200]
 
-        old_retries = cli_mod._max_retries
-        old_verbose = cli_mod._verbose_mode
-        cli_mod._max_retries = 2
-        cli_mod._verbose_mode = False
+        old_retries = _state._max_retries
+        old_verbose = _state._verbose_mode
+        _state._max_retries = 2
+        _state._verbose_mode = False
         try:
             result = cli_mod._request_with_retry(mock_client, "GET", "http://example.com/api")
             assert result.status_code == 200
             assert mock_client.request.call_count == 2
         finally:
-            cli_mod._max_retries = old_retries
-            cli_mod._verbose_mode = old_verbose
+            _state._max_retries = old_retries
+            _state._verbose_mode = old_verbose
 
     def test_retry_on_503(self):
         """503 responses should trigger retry."""
@@ -170,17 +171,17 @@ class TestRetryWithBackoff:
 
         mock_client.request.side_effect = [response_503, response_200]
 
-        old_retries = cli_mod._max_retries
-        old_verbose = cli_mod._verbose_mode
-        cli_mod._max_retries = 2
-        cli_mod._verbose_mode = False
+        old_retries = _state._max_retries
+        old_verbose = _state._verbose_mode
+        _state._max_retries = 2
+        _state._verbose_mode = False
         try:
             result = cli_mod._request_with_retry(mock_client, "GET", "http://example.com/api")
             assert result.status_code == 200
             assert mock_client.request.call_count == 2
         finally:
-            cli_mod._max_retries = old_retries
-            cli_mod._verbose_mode = old_verbose
+            _state._max_retries = old_retries
+            _state._verbose_mode = old_verbose
 
     def test_no_retry_on_400(self):
         """4xx errors (other than 429) should not trigger retry."""
@@ -190,14 +191,14 @@ class TestRetryWithBackoff:
 
         mock_client.request.return_value = response_400
 
-        old = cli_mod._max_retries
-        cli_mod._max_retries = 3
+        old = _state._max_retries
+        _state._max_retries = 3
         try:
             result = cli_mod._request_with_retry(mock_client, "GET", "http://example.com/api")
             assert result.status_code == 400
             assert mock_client.request.call_count == 1
         finally:
-            cli_mod._max_retries = old
+            _state._max_retries = old
 
     def test_max_retries_exhausted(self):
         """Should return last response when retries exhausted."""
@@ -208,17 +209,17 @@ class TestRetryWithBackoff:
 
         mock_client.request.return_value = response_429
 
-        old_retries = cli_mod._max_retries
-        old_verbose = cli_mod._verbose_mode
-        cli_mod._max_retries = 1
-        cli_mod._verbose_mode = False
+        old_retries = _state._max_retries
+        old_verbose = _state._verbose_mode
+        _state._max_retries = 1
+        _state._verbose_mode = False
         try:
             result = cli_mod._request_with_retry(mock_client, "GET", "http://example.com/api")
             assert result.status_code == 429
             assert mock_client.request.call_count == 2  # initial + 1 retry
         finally:
-            cli_mod._max_retries = old_retries
-            cli_mod._verbose_mode = old_verbose
+            _state._max_retries = old_retries
+            _state._verbose_mode = old_verbose
 
     def test_respects_retry_after_header(self):
         """Should use Retry-After header value for wait time."""
@@ -231,10 +232,10 @@ class TestRetryWithBackoff:
 
         mock_client.request.side_effect = [response_429, response_200]
 
-        old_retries = cli_mod._max_retries
-        old_verbose = cli_mod._verbose_mode
-        cli_mod._max_retries = 2
-        cli_mod._verbose_mode = False
+        old_retries = _state._max_retries
+        old_verbose = _state._verbose_mode
+        _state._max_retries = 2
+        _state._verbose_mode = False
         try:
             start = time.monotonic()
             result = cli_mod._request_with_retry(mock_client, "GET", "http://example.com/api")
@@ -243,8 +244,8 @@ class TestRetryWithBackoff:
             # Should have waited at least 0.01s (Retry-After value)
             assert elapsed >= 0.01
         finally:
-            cli_mod._max_retries = old_retries
-            cli_mod._verbose_mode = old_verbose
+            _state._max_retries = old_retries
+            _state._verbose_mode = old_verbose
 
     def test_retry_after_capped_at_300s(self):
         """Retry-After: 99999 should be capped — sleep should not exceed 300s."""
@@ -257,10 +258,10 @@ class TestRetryWithBackoff:
 
         mock_client.request.side_effect = [response_429, response_200]
 
-        old_retries = cli_mod._max_retries
-        old_verbose = cli_mod._verbose_mode
-        cli_mod._max_retries = 2
-        cli_mod._verbose_mode = False
+        old_retries = _state._max_retries
+        old_verbose = _state._verbose_mode
+        _state._max_retries = 2
+        _state._verbose_mode = False
         sleep_values = []
         try:
             with patch("time.sleep", side_effect=lambda s: sleep_values.append(s)):
@@ -268,8 +269,8 @@ class TestRetryWithBackoff:
             assert len(sleep_values) == 1
             assert sleep_values[0] <= 300.0, f"Sleep should be capped at 300s, got {sleep_values[0]}"
         finally:
-            cli_mod._max_retries = old_retries
-            cli_mod._verbose_mode = old_verbose
+            _state._max_retries = old_retries
+            _state._verbose_mode = old_verbose
 
     def test_aggregate_retry_cap(self):
         """Total retry wait should not exceed 600s aggregate cap."""
@@ -280,10 +281,10 @@ class TestRetryWithBackoff:
 
         mock_client.request.return_value = response_429
 
-        old_retries = cli_mod._max_retries
-        old_verbose = cli_mod._verbose_mode
-        cli_mod._max_retries = 5
-        cli_mod._verbose_mode = False
+        old_retries = _state._max_retries
+        old_verbose = _state._verbose_mode
+        _state._max_retries = 5
+        _state._verbose_mode = False
         sleep_values = []
         try:
             with patch("time.sleep", side_effect=lambda s: sleep_values.append(s)):
@@ -292,8 +293,8 @@ class TestRetryWithBackoff:
             assert total_sleep <= 600.0, f"Aggregate sleep {total_sleep:.0f}s exceeds 600s cap"
             assert result.status_code == 429
         finally:
-            cli_mod._max_retries = old_retries
-            cli_mod._verbose_mode = old_verbose
+            _state._max_retries = old_retries
+            _state._verbose_mode = old_verbose
 
     def test_zero_retries_means_no_retry(self):
         """With --retries 0 (default), no retry should happen."""
@@ -303,11 +304,11 @@ class TestRetryWithBackoff:
 
         mock_client.request.return_value = response_429
 
-        old = cli_mod._max_retries
-        cli_mod._max_retries = 0
+        old = _state._max_retries
+        _state._max_retries = 0
         try:
             result = cli_mod._request_with_retry(mock_client, "GET", "http://example.com/api")
             assert result.status_code == 429
             assert mock_client.request.call_count == 1
         finally:
-            cli_mod._max_retries = old
+            _state._max_retries = old

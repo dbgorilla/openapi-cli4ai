@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from openapi_cli4ai import cli as cli_mod
+from openapi_cli4ai import config as config_mod
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -31,8 +32,11 @@ def tmp_config(tmp_path, monkeypatch):
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
 
-    monkeypatch.setattr(cli_mod, "CONFIG_FILE", config_file)
-    monkeypatch.setattr(cli_mod, "CACHE_DIR", cache_dir)
+    # config owns these paths; cli re-exports them for its own messages and
+    # cache lookups, so patch both bindings to keep every code path in tmp.
+    for mod in (config_mod, cli_mod):
+        monkeypatch.setattr(mod, "CONFIG_FILE", config_file)
+        monkeypatch.setattr(mod, "CACHE_DIR", cache_dir)
 
     return cli_mod, tmp_path, cache_dir
 

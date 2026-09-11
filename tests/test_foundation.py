@@ -8,7 +8,7 @@ from typing import ClassVar
 import httpx
 import pytest
 
-from openapi_cli4ai import cli
+from openapi_cli4ai import _state, cli
 
 
 class TestFoundationGlobals:
@@ -18,24 +18,24 @@ class TestFoundationGlobals:
         assert hasattr(cli, "err_console"), "err_console global not defined"
 
     def test_verbose_mode_exists(self):
-        assert hasattr(cli, "_verbose_mode"), "_verbose_mode global not defined"
+        assert hasattr(_state, "_verbose_mode"), "_verbose_mode global not defined"
 
     def test_timeout_seconds_exists(self):
-        assert hasattr(cli, "_timeout_seconds"), "_timeout_seconds global not defined"
+        assert hasattr(_state, "_timeout_seconds"), "_timeout_seconds global not defined"
 
     def test_max_retries_exists(self):
-        assert hasattr(cli, "_max_retries"), "_max_retries global not defined"
+        assert hasattr(_state, "_max_retries"), "_max_retries global not defined"
 
     def test_verbose_mode_is_bool(self):
-        assert isinstance(cli._verbose_mode, bool)
+        assert isinstance(_state._verbose_mode, bool)
 
     def test_timeout_seconds_is_numeric(self):
-        assert isinstance(cli._timeout_seconds, (int, float))
-        assert cli._timeout_seconds > 0
+        assert isinstance(_state._timeout_seconds, (int, float))
+        assert _state._timeout_seconds > 0
 
     def test_max_retries_is_int(self):
-        assert isinstance(cli._max_retries, int)
-        assert cli._max_retries >= 0
+        assert isinstance(_state._max_retries, int)
+        assert _state._max_retries >= 0
 
 
 class TestFoundationHelperFunctions:
