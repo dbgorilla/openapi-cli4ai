@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-09-11
+
+### Added
+
+- `--profile` is accepted after the subcommand (`openapi-cli4ai endpoints --profile x`); long form only, since `-p` is reused by subcommands (#52)
+- `catalog install --dry-run` prints the exact profile file that would be written and changes nothing (#53)
+- `catalog uninstall <name>` removes an installed catalog profile plus its cached spec and token, with confirm prompt and `--force` (#54)
+- Drop-in profiles: one file per profile under `~/.openapi-cli4ai/profiles.d/<name>.toml`, read alongside `~/.openapi-cli4ai.toml` (a drop-in overrides a same-named entry). `catalog install` writes there. No migration needed (#56)
+- Remote catalog index: `catalog list`/`search`/`show`/`install` merge `profiles/index.json` from `main` over the bundled catalog (3 s timeout, cached one hour, silent fallback to cache then bundled; every remote entry is re-validated). `OAC_CATALOG_OFFLINE=1` disables it. New `catalog index` command generates the committed index; CI checks it is current (#57)
+- DNS TXT domain verification: a profile may set `domain_verified = true`; `catalog validate` resolves `_openapi-cli4ai.<domain>` and requires `github=<maintainer>`. Shown as a `✓ dns` badge, separate from the tier (#58)
+
+### Changed
+
+- `cli.py` split into `config.py`, `catalog.py`, `validator.py` plus small state/UI modules; behavior unchanged (#55)
+- Adopted ruff 0.16's default rule set; the rule selection is no longer implicit (#50, #51)
+- Dependency updates: `typer` 0.27.2, `click` 8.5, `python-dotenv`, `mypy`, `types-PyYAML`, and the GitHub Actions group (#49, #50)
+
+### Fixed
+
+- Rich swallowed TOML table headers such as `[profiles.x]` in `profile show` output; now rendered as plain text (#53)
+- File paths in install output are never wrapped across lines (#56)
+
 ## [0.6.0] - 2026-07-31
 
 ### Added
