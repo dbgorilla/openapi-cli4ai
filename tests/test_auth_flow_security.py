@@ -255,7 +255,8 @@ class TestDisplayError:
             404,
         )
         captured = capsys.readouterr()
-        assert "docs.example.com" in captured.out
+        # Full URL, not a host substring (CodeQL py/incomplete-url-substring-sanitization)
+        assert "https://docs.example.com/errors" in captured.out
 
     def test_non_dict_error(self, capsys):
         """Non-dict error should be displayed as string."""
