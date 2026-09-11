@@ -60,6 +60,7 @@ from rich.console import Console
 from rich.json import JSON as RichJSON
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APP_NAME = "openapi-cli4ai"
@@ -2819,7 +2820,7 @@ def cmd_profile_show(
     display_data = {name: profile}
     console.print(
         Panel(
-            tomli_w.dumps(display_data).strip(),
+            Text(tomli_w.dumps(display_data).strip()),  # [name] header is TOML, not Rich markup
             title=f"Profile: {name}" + (" (active)" if is_active else ""),
             border_style="cyan",
         )
@@ -3127,6 +3128,9 @@ def cmd_catalog_install(
     use: Annotated[bool, typer.Option("--use", help="Set as the active profile")] = False,
     force: Annotated[bool, typer.Option("--force", "-f", help="Overwrite an existing profile")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the community-profile confirmation")] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print the profile TOML that would be written and exit without changes")
+    ] = False,
 ) -> None:
     """Install a catalog profile into your config."""
     entry = _catalog_find(name)
@@ -3135,6 +3139,20 @@ def cmd_catalog_install(
         raise typer.Exit(1)
     slug = str(entry.get("_slug"))
     tier = entry.get("_tier", "community")
+
+    if dry_run:
+        # Nothing is written, so the community opt-in prompt is not needed:
+        # the point of a dry run is to inspect the endpoint and auth shape
+        # before deciding. Print the exact block `save_profiles` would emit.
+        block = tomli_w.dumps({"profiles": {slug: _catalog_to_profile(entry)}}).strip()
+        console.print(f"[dim]# dry run: {tier} profile '{slug}' — would be written to {CONFIG_FILE}[/dim]")
+        # Text(): TOML table headers like [profiles.x] are not Rich markup. soft_wrap
+        # keeps long lines intact so the output can be pasted straight into config.
+        console.print(Text(block), soft_wrap=True)
+        console.print("[dim]Nothing changed.[/dim]")
+        if use or not load_profiles().get("active_profile"):
+            console.print(f"[dim]active_profile would be set to '{slug}'.[/dim]")
+        return
 
     # Community profiles are auto-validated but not maintainer-verified. Installing
     # writes an endpoint that will receive the user's credentials on the first call,
