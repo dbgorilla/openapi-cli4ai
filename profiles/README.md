@@ -27,6 +27,11 @@ a **tier**, shown next to every entry, not a gate on being listed.
 | **Verified** | `verified/` | A maintainer confirmed the spec loads and the auth flow works. |
 | **Community** | `community/` | Contributed via PR and passed automated validation. Not manually vetted. |
 
+Independently of the tier, a profile can carry a **domain-verified** badge
+(`✓ dns` in listings): the owner of the API's domain has published a DNS TXT
+record naming the maintainer, so the listing is backed by domain control, not
+just a self-declared `source`. See [Domain verification](#domain-verification).
+
 New submissions go to `community/`; a maintainer may promote a profile to
 `verified/` after checking it end to end. Installing a **community** profile
 prompts for confirmation (it shows the `base_url` your credentials would be
@@ -59,6 +64,8 @@ source = "https://example.com/docs"      # the API's official docs (same domain 
 base_url = "https://api.example.com"
 openapi_url = "https://api.example.com/openapi.json"   # or: openapi_path = "/openapi.json"
 
+domain_verified = true                   # optional: see "Domain verification" below
+
 [auth]
 type = "api-key"                         # none | bearer | oidc | device | api-key | basic
 env_var = "EXAMPLE_API_KEY"              # reference secrets by env var — never inline them
@@ -68,6 +75,22 @@ header = "x-api-key"
 Auth field names match the CLI's runtime config; see
 [`../examples/profiles.toml.example`](../examples/profiles.toml.example) for
 each auth type.
+
+## Domain verification
+
+To claim the `✓ dns` badge, set `domain_verified = true` in the profile and have
+the API's domain owner publish this TXT record (registrable domain of
+`base_url`, e.g. `api.acme.co.uk` → `acme.co.uk`):
+
+```
+_openapi-cli4ai.acme.co.uk.  IN  TXT  "github=<maintainer>"
+```
+
+`<maintainer>` must equal the profile's `maintainer` field (case-insensitive).
+`catalog validate` resolves the record and fails the PR if it is missing or
+names someone else; the claim is re-checked on every profile change. Remove the
+claim (or the record) to drop the badge. The lookup needs `dnspython`, which
+`uv sync` installs for contributors; end users never resolve DNS.
 
 ## Contributing a profile
 
