@@ -61,6 +61,7 @@ from rich.json import JSON as RichJSON
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from typer.core import TyperGroup
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APP_NAME = "openapi-cli4ai"
@@ -101,11 +102,53 @@ COMMON_SPEC_PATHS = [
 
 console = Console()
 
+
 # ── Typer App Setup ────────────────────────────────────────────────────────────
+def _hoist_profile_option(args: list[str]) -> list[str]:
+    """Move any `--profile X` / `--profile=X` to the front of argv.
+
+    `--profile` is a root-callback option, so Click only accepts it before the
+    subcommand. Users naturally write `openapi-cli4ai endpoints --profile x`;
+    this pre-parser makes that placement work. Only the long form is hoisted:
+    the short `-p` is reused by subcommands (e.g. `--password/-p`), so moving
+    it would change their meaning. Everything after a literal `--` is left
+    untouched.
+    """
+    hoisted: list[str] = []
+    rest: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            rest.extend(args[i:])
+            break
+        if arg == "--profile" and i + 1 < len(args):
+            hoisted.extend(["--profile", args[i + 1]])
+            i += 2
+            continue
+        if arg.startswith("--profile="):
+            hoisted.append(arg)
+            i += 1
+            continue
+        rest.append(arg)
+        i += 1
+    return hoisted + rest
+
+
+class _ProfileAnywhereGroup(TyperGroup):
+    """Root command group that accepts `--profile` after the subcommand."""
+
+    # `ctx` is typed Any: the supertype uses Typer's vendored Click Context, which
+    # has no public import path, and the parameter is passed straight through.
+    def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
+        return super().parse_args(ctx, _hoist_profile_option(args))
+
+
 app = typer.Typer(
     name=APP_NAME,
     help="Turn any REST API with an OpenAPI spec into an AI-ready CLI.",
     no_args_is_help=True,
+    cls=_ProfileAnywhereGroup,
 )
 profile_app = typer.Typer(help="Manage your installed API profiles.")
 app.add_typer(profile_app, name="profile")
@@ -3260,7 +3303,10 @@ def main(
     ctx: typer.Context,
     version: Annotated[bool, typer.Option("--version", help="Show version")] = False,
     profile: Annotated[
-        str | None, typer.Option("--profile", "-p", help="Use this profile for this command only")
+        str | None,
+        typer.Option(
+            "--profile", "-p", help="Use this profile for this command only (accepted before or after the subcommand)"
+        ),
     ] = None,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show request/response details")] = False,
