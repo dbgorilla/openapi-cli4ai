@@ -114,4 +114,6 @@ def test_corrupt_dropin_is_a_loud_error(tmp_config):
     (config.PROFILES_DIR / "bad.toml").write_text("this is not = toml [")
     result = runner.invoke(app, ["profile", "list"])
     assert result.exit_code == 1
-    assert "bad.toml" in result.output
+    # Rich wraps long paths; compare without line breaks
+    assert "bad.toml" in result.output.replace("\n", "")
+    assert "corrupt" in result.output
