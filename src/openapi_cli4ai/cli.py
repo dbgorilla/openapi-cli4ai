@@ -68,6 +68,7 @@ from openapi_cli4ai.catalog import (
     _catalog_to_profile,
     _load_catalog,
     _render_catalog,
+    index_json,
 )
 from openapi_cli4ai.config import (
     _PROFILE_FILES_KEY,
@@ -2866,6 +2867,29 @@ def cmd_catalog_uninstall(
     _remove_profile(slug, force)
 
 
+@catalog_app.command("index")
+def cmd_catalog_index(
+    path: Annotated[str, typer.Argument(help="Index file to write")] = "profiles/index.json",
+    check: Annotated[bool, typer.Option("--check", help="Fail if the file is out of date instead of writing")] = False,
+) -> None:
+    """Generate profiles/index.json from the catalog files (maintainers; CI runs --check)."""
+    expected = index_json(_load_catalog(remote=False))
+    target = Path(path)
+    if check:
+        try:
+            current = target.read_text(encoding="utf-8")
+        except OSError:
+            current = ""
+        if current != expected:
+            err_console.print(f"[red]{path} is out of date.[/red] Run: openapi-cli4ai catalog index")
+            _gh_annotate("error", path, "index out of date; run `openapi-cli4ai catalog index` and commit")
+            raise typer.Exit(1)
+        console.print(f"[green]{path} is up to date.[/green]")
+        return
+    _atomic_write(target, expected)
+    console.print(f"[green]Wrote {path}[/green] ({len(_load_catalog(remote=False))} profiles)")
+
+
 @catalog_app.command("validate")
 def cmd_catalog_validate(
     path: Annotated[str | None, typer.Argument(help="Profile TOML file to validate")] = None,
@@ -2875,7 +2899,7 @@ def cmd_catalog_validate(
     """Validate a catalog profile: fields, ownership, secrets, and a live spec fetch."""
     items: list[tuple[str, dict]] = []
     if validate_all:
-        for entry in _load_catalog():
+        for entry in _load_catalog(remote=False):
             items.append((f"profiles/{entry.get('_tier')}/{entry.get('_slug')}.toml", entry))
     elif path:
         target = Path(path)
