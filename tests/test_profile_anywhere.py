@@ -3,6 +3,7 @@
 import tomli_w
 from typer.testing import CliRunner
 
+from openapi_cli4ai import _state
 from openapi_cli4ai.cli import _hoist_profile_option, app
 
 runner = CliRunner()
@@ -50,10 +51,10 @@ def test_hoist_ignores_trailing_profile_without_value():
 def test_profile_after_subcommand_sets_override(cli_module, tmp_config, monkeypatch):
     mod = cli_module
     _write_two_profiles(mod)
-    monkeypatch.setattr(mod, "_profile_override", None)
+    monkeypatch.setattr(_state, "_profile_override", None)
     result = runner.invoke(app, ["profile", "list", "--profile", "b"])
     assert result.exit_code == 0, result.output
-    assert mod._profile_override == "b"
+    assert _state._profile_override == "b"
     name, _ = mod.get_active_profile()
     assert name == "b"
 
@@ -61,17 +62,17 @@ def test_profile_after_subcommand_sets_override(cli_module, tmp_config, monkeypa
 def test_profile_before_subcommand_still_works(cli_module, tmp_config, monkeypatch):
     mod = cli_module
     _write_two_profiles(mod)
-    monkeypatch.setattr(mod, "_profile_override", None)
+    monkeypatch.setattr(_state, "_profile_override", None)
     result = runner.invoke(app, ["--profile", "b", "profile", "list"])
     assert result.exit_code == 0, result.output
-    assert mod._profile_override == "b"
+    assert _state._profile_override == "b"
 
 
 def test_profile_flag_still_beats_env(cli_module, tmp_config, monkeypatch):
     mod = cli_module
     _write_two_profiles(mod)
     monkeypatch.setenv("OAC_PROFILE", "a")
-    monkeypatch.setattr(mod, "_profile_override", None)
+    monkeypatch.setattr(_state, "_profile_override", None)
     result = runner.invoke(app, ["profile", "list", "--profile=b"])
     assert result.exit_code == 0, result.output
     name, _ = mod.get_active_profile()

@@ -15,6 +15,8 @@ import httpx
 import pytest
 import typer
 
+from openapi_cli4ai import config as config_mod
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -156,6 +158,7 @@ class TestInjectTokenHardening:
         cache_dir = tmp_path / "cache"
         cache_dir.mkdir()
         monkeypatch.setattr(cli_module, "CACHE_DIR", cache_dir)
+        monkeypatch.setattr(config_mod, "CACHE_DIR", cache_dir)
 
         cli_module._inject_token(
             profile_name="../../etc/evil",

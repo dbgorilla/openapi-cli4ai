@@ -16,12 +16,17 @@ Thanks for your interest in contributing!
 src/openapi_cli4ai/
   __init__.py       # Package exports
   __main__.py       # python -m support
-  cli.py            # All CLI code lives here
+  cli.py            # Typer commands, HTTP/auth flows, spec fetching
+  config.py         # Config file, cache dir, active-profile precedence
+  catalog.py        # Bundled profile catalog: load, find, map to a profile
+  validator.py      # Catalog profile validator (shared by `catalog validate` and CI)
+  _state.py         # Runtime flags set by the root command (--verbose, --profile, ...)
+  _ui.py            # Shared Rich consoles and the verbose logger
 openapi-cli4ai      # Standalone shim (imports from package)
 tests/              # pytest tests
 ```
 
-The core code lives in `src/openapi_cli4ai/cli.py`. The standalone `openapi-cli4ai` script is a thin shim that imports from the package.
+Commands live in `src/openapi_cli4ai/cli.py`; it imports the helpers it needs from the service modules, so tests can patch either the service module or the `cli` binding. The standalone `openapi-cli4ai` script is a thin shim that imports from the package.
 
 ## Testing
 

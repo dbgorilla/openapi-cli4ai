@@ -26,16 +26,12 @@ import base64
 import binascii
 import hashlib
 import html as html_module
-import importlib.resources
-import ipaddress
 import json
 import os
 import random
 import re
 import secrets
-import socket
 import sys
-import tempfile
 import time
 import tomllib
 import urllib.parse
@@ -55,24 +51,46 @@ import httpx
 import tomli_w
 import typer
 import yaml
-from publicsuffix2 import get_sld
-from rich.console import Console
 from rich.json import JSON as RichJSON
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from typer.core import TyperGroup
 
+from openapi_cli4ai import _state
+from openapi_cli4ai._state import get_verify_ssl, set_insecure_mode
+from openapi_cli4ai._ui import _verbose, console, err_console
+from openapi_cli4ai.catalog import (
+    _auth_env_vars,
+    _auth_summary,
+    _auth_uses_login,
+    _catalog_find,
+    _catalog_to_profile,
+    _load_catalog,
+    _render_catalog,
+)
+from openapi_cli4ai.config import (
+    APP_NAME,
+    CACHE_DIR,
+    CACHE_TTL,
+    CONFIG_FILE,
+    _atomic_write,
+    _resolve_env_vars,
+    _resolve_spec_url,
+    _safe_profile_name,
+    _spec_cache_paths,
+    ensure_dirs,
+    get_active_profile,
+    load_profiles,
+    save_profiles,
+)
+from openapi_cli4ai.validator import _gh_annotate, _validate_catalog_entry
+
 # ── Constants ──────────────────────────────────────────────────────────────────
-APP_NAME = "openapi-cli4ai"
 try:
     VERSION = _pkg_version(APP_NAME)
 except PackageNotFoundError:  # running from a source checkout without an install
     VERSION = "0.0.0+dev"
-CONFIG_FILE = Path.home() / ".openapi-cli4ai.toml"
-CACHE_DIR = Path.home() / ".cache" / APP_NAME
-CACHE_TTL = 3600  # 1 hour
-ENV_PREFIX = "OAC_"
 
 # HTTP methods we care about from OpenAPI specs
 VALID_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
@@ -99,8 +117,6 @@ COMMON_SPEC_PATHS = [
     "/api-docs/openapi.json",
     "/docs/openapi.json",
 ]
-
-console = Console()
 
 
 # ── Typer App Setup ────────────────────────────────────────────────────────────
@@ -155,25 +171,8 @@ app.add_typer(profile_app, name="profile")
 catalog_app = typer.Typer(help="Browse and install ready-made API profiles.")
 app.add_typer(catalog_app, name="catalog")
 
+
 # Global state
-_insecure_mode = False
-err_console = Console(stderr=True)
-
-_verbose_mode = False
-_timeout_seconds = 60.0
-_max_retries = 0
-_profile_override: str | None = None
-
-
-def set_insecure_mode(insecure: bool) -> None:
-    global _insecure_mode
-    _insecure_mode = insecure
-
-
-def get_verify_ssl() -> bool:
-    return not _insecure_mode
-
-
 def _redact_headers(headers: dict) -> dict:
     """Return a copy of headers with sensitive values redacted for verbose output."""
     sensitive_value_prefixes = ("bearer ", "basic ", "token ")
@@ -195,22 +194,16 @@ def _redact_headers(headers: dict) -> dict:
     return redacted
 
 
-def _verbose(msg: str) -> None:
-    """Print a verbose message to stderr if verbose mode is enabled."""
-    if _verbose_mode:
-        err_console.print(f"[dim]> {msg}[/dim]")
-
-
 def _make_client(verify: bool = True, follow_redirects: bool = True) -> httpx.Client:
     """Create a configured httpx.Client with the global timeout.
 
-    Callers are responsible for retry logic when _max_retries > 0.
+    Callers are responsible for retry logic when _state._max_retries > 0.
     Set follow_redirects=False for auth requests that send credentials
     to prevent replay of secrets on 307/308 redirects.
     """
     return httpx.Client(
         verify=verify,
-        timeout=_timeout_seconds,
+        timeout=_state._timeout_seconds,
         follow_redirects=follow_redirects,
     )
 
@@ -230,7 +223,7 @@ def _request_with_retry(
     """
     idempotent_methods = {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"}
     can_retry = method.upper() in idempotent_methods
-    max_attempts = max(1, _max_retries + 1) if can_retry else 1
+    max_attempts = max(1, _state._max_retries + 1) if can_retry else 1
     max_total_wait = 600.0  # 10 minute aggregate cap
     last_response = None
     total_waited = 0.0
@@ -275,11 +268,6 @@ def _request_with_retry(
 
 
 # ── Directory Helpers ──────────────────────────────────────────────────────────
-def ensure_dirs() -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    CACHE_DIR.chmod(0o700)
-
-
 def _resolve_file_path(file_path: str | Path, purpose: str = "file") -> Path:
     """Resolve a user-supplied file path, following symlinks.
 
@@ -296,52 +284,6 @@ def _resolve_file_path(file_path: str | Path, purpose: str = "file") -> Path:
     except OSError:
         pass  # CWD may not exist in some edge cases
     return resolved
-
-
-def _atomic_write(target: Path, content: str, restricted: bool = False) -> None:
-    """Write content to a file atomically using temp file + rename.
-
-    Prevents partial writes from corrupting files. If restricted=True,
-    sets 0o600 permissions (owner read/write only) for credential files.
-    """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    old_umask = os.umask(0o077) if restricted else None
-    try:
-        fd, temp_path = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(content)
-            os.replace(temp_path, target)
-        except BaseException:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
-            raise
-    finally:
-        if old_umask is not None:
-            os.umask(old_umask)
-
-
-def _safe_profile_name(name: str) -> str:
-    """Sanitize a profile name for use in file paths.
-
-    Strips path separators and traversal sequences to prevent
-    writing files outside CACHE_DIR. Appends a short hash to
-    avoid collisions when different raw names sanitize to the
-    same basename (e.g., "a/b" and "c/b" both become "b").
-    """
-    # Remove any path components — only the basename matters
-    safe = Path(name).name
-    # Reject empty or dot-only names
-    if not safe or safe in (".", ".."):
-        safe = "default"
-    # If the name was sanitized (different from input), append a hash
-    # to avoid collisions between distinct names that share a basename
-    if safe != name:
-        name_hash = hashlib.sha256(name.encode()).hexdigest()[:8]
-        safe = f"{safe}_{name_hash}"
-    return safe
 
 
 def _save_token(profile_name: str, token_data: dict) -> Path:
@@ -369,114 +311,7 @@ def _require_env_var(env_var: str, label: str, quiet: bool = False) -> str:
 
 
 # ── Profile Management ────────────────────────────────────────────────────────
-def load_profiles() -> dict:
-    """Load profiles from TOML config file."""
-    if not CONFIG_FILE.exists():
-        return {"active_profile": None, "profiles": {}}
-    try:
-        data = tomllib.loads(CONFIG_FILE.read_text())
-        if not isinstance(data, dict):
-            err_console.print(f"[red]Error: Config file has unexpected structure ({CONFIG_FILE})[/red]")
-            err_console.print("[dim]Expected a TOML table with [profiles]. Fix or delete the file.[/dim]")
-            raise typer.Exit(1)
-        profiles = data.get("profiles", {})
-        if not isinstance(profiles, dict):
-            err_console.print(f"[red]Error: 'profiles' in config is not a table ({CONFIG_FILE})[/red]")
-            err_console.print("[dim]Expected [profiles.name] sections. Fix or delete the file.[/dim]")
-            raise typer.Exit(1)
-        data["profiles"] = profiles
-        return data
-    except tomllib.TOMLDecodeError as e:
-        err_console.print(f"[red]Error: Config file is corrupt ({CONFIG_FILE}): {e}[/red]")
-        err_console.print("[dim]Fix the file manually or delete it to start fresh.[/dim]")
-        raise typer.Exit(1)
-    except OSError as e:
-        err_console.print(f"[red]Error: Cannot read config file ({CONFIG_FILE}): {e}[/red]")
-        raise typer.Exit(1)
-
-
-def save_profiles(data: dict) -> None:
-    """Save profiles to TOML config file."""
-    ensure_dirs()
-    # TOML doesn't support None values — filter them out before writing
-    clean = {k: v for k, v in data.items() if v is not None}
-    _atomic_write(CONFIG_FILE, tomli_w.dumps(clean), restricted=True)
-
-
-def _resolve_env_vars(obj: Any) -> Any:
-    """Recursively replace {env:VAR_NAME} placeholders with environment values."""
-    if isinstance(obj, str):
-        for match in re.finditer(r"\{env:([^}]+)\}", obj):
-            env_name = match.group(1)
-            env_val = os.environ.get(env_name)
-            if env_val is None:
-                _verbose(f"Environment variable {env_name} is not set (referenced as {{env:{env_name}}})")
-                env_val = ""
-            obj = obj.replace(match.group(0), env_val)
-        return obj
-    elif isinstance(obj, dict):
-        return {k: _resolve_env_vars(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [_resolve_env_vars(v) for v in obj]
-    return obj
-
-
-def get_active_profile() -> tuple[str, dict]:
-    """Return (name, profile_dict) for the active profile.
-
-    Priority: --profile flag > OAC_PROFILE env var > config file active_profile.
-    Resolves {env:VAR_NAME} placeholders throughout the profile.
-    """
-    data = load_profiles()
-    profiles = data.get("profiles", {})
-
-    if not profiles:
-        err_console.print("[red]No profiles configured. Run 'openapi-cli4ai init' to set one up.[/red]")
-        raise typer.Exit(1)
-
-    # Priority: --profile flag > OAC_PROFILE env var > config active_profile
-    env_profile = os.environ.get(f"{ENV_PREFIX}PROFILE")
-    name = _profile_override or env_profile or data.get("active_profile")
-
-    if name and name not in profiles:
-        if _profile_override:
-            origin = " (from --profile)"
-        elif env_profile:
-            origin = " (from OAC_PROFILE env var)"
-        else:
-            origin = ""
-        err_console.print(f"[red]Profile '{name}' not found{origin}.[/red]")
-        available = ", ".join(profiles.keys())
-        err_console.print(f"[dim]Available profiles: {available}[/dim]")
-        raise typer.Exit(1)
-    elif not name:
-        name = next(iter(profiles))
-
-    profile = _resolve_env_vars(profiles[name])
-    if not isinstance(profile, dict):
-        err_console.print(f"[red]Error: Profile '{name}' is not a valid table in config.[/red]")
-        err_console.print("[dim]Expected [profiles.name] with base_url, auth, etc.[/dim]")
-        raise typer.Exit(1)
-    profile["_name"] = name  # Inject name for internal use
-    return name, profile
-
-
 # ── Spec Fetching & Caching ───────────────────────────────────────────────────
-def _spec_cache_paths(spec_url: str) -> tuple[Path, Path]:
-    """Return (cache_file, meta_file) paths for a spec URL."""
-    url_hash = hashlib.sha256(spec_url.encode()).hexdigest()[:12]
-    return CACHE_DIR / f"spec_{url_hash}.json", CACHE_DIR / f"spec_{url_hash}.meta"
-
-
-def _resolve_spec_url(profile: dict) -> str:
-    """Determine the full URL for fetching the OpenAPI spec."""
-    if profile.get("openapi_url"):
-        return profile["openapi_url"]
-    base = profile["base_url"].rstrip("/")
-    path = profile.get("openapi_path", "/openapi.json").lstrip("/")
-    return f"{base}/{path}"
-
-
 def fetch_spec(profile: dict, refresh: bool = False) -> dict:
     """Fetch OpenAPI spec with caching and stale fallback."""
     spec_url = _resolve_spec_url(profile)
@@ -2880,253 +2715,6 @@ def cmd_profile_show(
 
 
 # ── Profile Catalog ───────────────────────────────────────────────────────────
-CATALOG_TIERS = ("verified", "community")
-_CATALOG_META_FIELDS = ("name", "description", "maintainer", "source")
-_CATALOG_AUTH_TYPES = ("none", "bearer", "oidc", "device", "api-key", "basic")
-_CATALOG_PROMO_TERMS = (
-    "best",
-    "fastest",
-    "leading",
-    "#1",
-    "world-class",
-    "cutting-edge",
-    "revolutionary",
-    "seamless",
-    "powerful",
-    "sign up",
-    "free trial",
-    "get started",
-)
-_CATALOG_SECRET_KEYS = ("token", "password", "secret", "api_key", "apikey", "client_secret")
-# Stored prompt-injection markers: catalog text ships in the wheel and feeds the AI router.
-_CATALOG_INJECTION_MARKERS = (
-    "ignore previous",
-    "ignore all previous",
-    "disregard the",
-    "system prompt",
-    "you are now",
-    "new instructions",
-    "</system>",
-    "<|im_start|>",
-)
-_CATALOG_MAX_SPEC_BYTES = 5 * 1024 * 1024
-
-
-def _catalog_root() -> Any:
-    """Locate the catalog: bundled in the wheel, else profiles/ in a source checkout."""
-    try:
-        bundled = importlib.resources.files("openapi_cli4ai") / "_catalog"
-        if bundled.is_dir():
-            return bundled
-    except (ModuleNotFoundError, FileNotFoundError, AttributeError, TypeError):
-        pass
-    dev = Path(__file__).resolve().parents[2] / "profiles"
-    return dev if dev.is_dir() else None
-
-
-def _load_catalog() -> list[dict]:
-    """Return every catalog profile as a dict with _tier and _slug attached."""
-    root = _catalog_root()
-    entries: list[dict] = []
-    if root is None:
-        return entries
-    for tier in CATALOG_TIERS:
-        tier_dir = root / tier
-        if not tier_dir.is_dir():
-            continue
-        for item in sorted(tier_dir.iterdir(), key=lambda p: p.name):
-            if not item.name.endswith(".toml"):
-                continue
-            try:
-                entry = tomllib.loads(item.read_text(encoding="utf-8"))
-            except (OSError, tomllib.TOMLDecodeError):
-                continue
-            entry["_tier"] = tier
-            entry["_slug"] = item.name[: -len(".toml")]
-            entries.append(entry)
-    return entries
-
-
-def _catalog_find(name: str) -> dict | None:
-    for entry in _load_catalog():
-        if name in (entry.get("_slug"), entry.get("name")):
-            return entry
-    return None
-
-
-def _catalog_to_profile(entry: dict) -> dict:
-    """Map a catalog entry to a runtime profile (drop catalog-only metadata)."""
-    profile = {k: v for k, v in entry.items() if k not in _CATALOG_META_FIELDS and not k.startswith("_")}
-    profile["verify_ssl"] = True
-    return profile
-
-
-def _auth_env_vars(auth: dict) -> list[str]:
-    """Environment variables the user must set for this auth config."""
-    keys = {
-        "api-key": ("env_var",),
-        "bearer": ("token_env_var",),
-        "basic": ("username_env_var", "password_env_var"),
-    }.get(auth.get("type", "none"), ())
-    return [auth[k] for k in keys if auth.get(k)]
-
-
-def _auth_uses_login(auth: dict) -> bool:
-    kind = auth.get("type", "none")
-    return kind in ("oidc", "device") or (kind == "bearer" and bool(auth.get("token_endpoint")))
-
-
-def _auth_summary(auth: dict) -> str:
-    kind = auth.get("type", "none")
-    if _auth_uses_login(auth):
-        return f"{kind} → run 'login'"
-    env = _auth_env_vars(auth)
-    return f"{kind} → set {', '.join(env)}" if env else kind
-
-
-def _registrable_domain(host: str) -> str:
-    """Registrable domain via the Public Suffix List (handles co.uk, shared hosts)."""
-    return (get_sld(host.lower()) or host.lower()) if host else ""
-
-
-def _assert_public_url(url: str) -> None:
-    """Reject non-https or non-public hosts. SSRF guard for validation fetches.
-
-    Catalog profiles describe public APIs; the CI validator must never be
-    coaxed into fetching cloud-metadata (169.254.169.254) or internal hosts.
-    """
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https":
-        raise ValueError(f"must be an https:// URL (got '{parsed.scheme or 'no scheme'}')")
-    host = parsed.hostname
-    if not host:
-        raise ValueError("URL has no host")
-    try:
-        infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as exc:
-        raise ValueError(f"cannot resolve host '{host}': {exc}")
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global or ip.is_multicast or ip.is_reserved:
-            raise ValueError(f"host '{host}' resolves to non-public address {ip}")
-
-
-def _fetch_public_spec(url: str) -> tuple[str, str]:
-    """SSRF-guarded, size-capped, timeout-bounded fetch of a catalog spec URL."""
-    _assert_public_url(url)
-    with (
-        httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=True, max_redirects=3) as client,
-        client.stream("GET", url) as resp,
-    ):
-        resp.raise_for_status()
-        _assert_public_url(str(resp.url))  # re-check the post-redirect host
-        content_type = resp.headers.get("content-type", "")
-        body = bytearray()
-        for chunk in resp.iter_bytes():
-            body += chunk
-            if len(body) > _CATALOG_MAX_SPEC_BYTES:
-                raise ValueError(f"spec exceeds {_CATALOG_MAX_SPEC_BYTES // (1024 * 1024)}MB limit")
-    return content_type, bytes(body).decode("utf-8", errors="replace")
-
-
-def _parse_openapi_text(content_type: str, text: str) -> Any:
-    ct = content_type.lower()
-    if ("yaml" in ct or "vnd.oai.openapi" in ct) and "json" not in ct:
-        return yaml.safe_load(text)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return yaml.safe_load(text)
-
-
-def _validate_catalog_entry(entry: dict, *, check_spec: bool) -> tuple[list[str], list[str]]:
-    """Return (errors, warnings) for one catalog entry. Errors block a submission."""
-    errors: list[str] = []
-    warnings: list[str] = []
-
-    for field in ("name", "description", "maintainer", "source", "base_url", "auth"):
-        if not entry.get(field):
-            errors.append(f"missing required field '{field}'")
-    if errors:
-        return errors, warnings
-
-    name = str(entry["name"])
-    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?", name):
-        errors.append(f"name '{name}' must be lowercase letters, digits, and hyphens")
-    if entry.get("_slug") and entry["_slug"] != name:
-        errors.append(f"name '{name}' must match the file name '{entry['_slug']}'")
-
-    desc = str(entry["description"])
-    if not 3 <= len(desc) <= 100:
-        errors.append("description must be 3-100 characters")
-    promo = [t for t in _CATALOG_PROMO_TERMS if t in desc.lower()]
-    if promo:
-        warnings.append(f"description contains promotional terms {promo}; keep it factual")
-    injection = [m for m in _CATALOG_INJECTION_MARKERS if m in desc.lower()]
-    if injection:
-        errors.append(f"description contains prompt-injection markers {injection}")
-
-    for field in ("source", "base_url"):
-        if not str(entry[field]).startswith("https://"):
-            errors.append(f"{field} must be an https:// URL")
-    if entry.get("openapi_url") and not str(entry["openapi_url"]).startswith("https://"):
-        errors.append("openapi_url must be an https:// URL")
-    if not entry.get("openapi_url") and not entry.get("openapi_path"):
-        errors.append("provide either openapi_url or openapi_path")
-
-    auth = entry.get("auth")
-    if not isinstance(auth, dict) or auth.get("type") not in _CATALOG_AUTH_TYPES:
-        errors.append(f"auth.type must be one of: {', '.join(_CATALOG_AUTH_TYPES)}")
-    else:
-        if auth.get("type") == "api-key" and not auth.get("env_var"):
-            errors.append("auth.env_var is required for api-key profiles")
-        for key, value in auth.items():
-            if key.lower() in _CATALOG_SECRET_KEYS and isinstance(value, str):
-                errors.append(f"auth.{key} looks like an inline secret; reference an *_env_var instead")
-
-    if errors:
-        return errors, warnings
-
-    base_host = urllib.parse.urlparse(str(entry["base_url"])).hostname or ""
-    source_host = urllib.parse.urlparse(str(entry["source"])).hostname or ""
-    if _registrable_domain(base_host) != _registrable_domain(source_host):
-        errors.append(
-            f"ownership: base_url domain '{_registrable_domain(base_host)}' != "
-            f"source domain '{_registrable_domain(source_host)}' "
-            "(source must be the API's own developer/docs URL)"
-        )
-
-    if check_spec:
-        profile = _catalog_to_profile(entry)
-        try:
-            spec_url = _resolve_spec_url(profile)
-            content_type, text = _fetch_public_spec(spec_url)
-            spec = _parse_openapi_text(content_type, text)
-        except (httpx.HTTPError, ValueError, yaml.YAMLError) as exc:
-            errors.append(f"spec not reachable/valid: {exc}")
-            return errors, warnings
-        if not isinstance(spec, dict) or not (spec.get("openapi") or spec.get("swagger")):
-            errors.append("spec is not a valid OpenAPI/Swagger document")
-
-    return errors, warnings
-
-
-def _render_catalog(entries: list[dict], title: str) -> None:
-    if not entries:
-        console.print("[dim]The catalog is empty.[/dim]")
-        return
-    table = Table(title=f"{title} ({len(entries)})")
-    table.add_column("Name", style="cyan")
-    table.add_column("Tier")
-    table.add_column("Description", style="green")
-    for entry in sorted(entries, key=lambda e: (e.get("_tier", ""), e.get("_slug", ""))):
-        tier = entry.get("_tier", "community")
-        style = "bold green" if tier == "verified" else "yellow"
-        table.add_row(entry.get("_slug", "?"), f"[{style}]{tier}[/{style}]", str(entry.get("description", "")))
-    console.print(table)
-    console.print("[dim]Install one with: openapi-cli4ai catalog install <name>[/dim]")
-
-
 @catalog_app.command("list")
 def cmd_catalog_list() -> None:
     """List every profile in the catalog."""
@@ -3266,12 +2854,6 @@ def cmd_catalog_uninstall(
     _remove_profile(slug, force)
 
 
-def _gh_annotate(level: str, file: str, msg: str) -> None:
-    """Emit a GitHub Actions annotation so validation errors show on the PR diff."""
-    if os.environ.get("GITHUB_ACTIONS"):
-        print(f"::{level} file={file}::{msg}")
-
-
 @catalog_app.command("validate")
 def cmd_catalog_validate(
     path: Annotated[str | None, typer.Argument(help="Profile TOML file to validate")] = None,
@@ -3342,12 +2924,11 @@ def main(
     Point it at an OpenAPI spec. Discover endpoints. Call them directly or let
     an LLM figure out the right one from your natural language query.
     """
-    global _verbose_mode, _timeout_seconds, _max_retries, _profile_override
     set_insecure_mode(insecure)
-    _verbose_mode = verbose
-    _timeout_seconds = timeout
-    _max_retries = retries
-    _profile_override = profile
+    _state._verbose_mode = verbose
+    _state._timeout_seconds = timeout
+    _state._max_retries = retries
+    _state._profile_override = profile
 
     if version:
         console.print(f"{APP_NAME} {VERSION}")
