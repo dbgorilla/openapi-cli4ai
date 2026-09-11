@@ -11,8 +11,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from openapi_cli4ai.cli import app
 from openapi_cli4ai import cli as cli_mod
+from openapi_cli4ai.cli import app
 
 runner = CliRunner()
 

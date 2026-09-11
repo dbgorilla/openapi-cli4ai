@@ -24,11 +24,9 @@ from __future__ import annotations
 
 import base64
 import binascii
-from email.utils import parsedate_to_datetime
 import hashlib
+import html as html_module
 import importlib.resources
-from importlib.metadata import version as _pkg_version, PackageNotFoundError
-import html as html_module  # noqa: F401 (used by F3: OIDC callback HTML escaping)
 import ipaddress
 import json
 import os
@@ -42,7 +40,10 @@ import time
 import tomllib
 import urllib.parse
 import webbrowser
+from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from typing import Annotated, Any, Optional  # noqa: F401 (Any used by F2: resolve_refs/resolve_env_vars)
 
@@ -50,15 +51,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import httpx  # noqa: E402
-from publicsuffix2 import get_sld  # noqa: E402
-import tomli_w  # noqa: E402
-import typer  # noqa: E402
-import yaml  # noqa: E402
-from rich.console import Console  # noqa: E402
-from rich.json import JSON as RichJSON  # noqa: E402
-from rich.panel import Panel  # noqa: E402
-from rich.table import Table  # noqa: E402
+import httpx
+import tomli_w
+import typer
+import yaml
+from publicsuffix2 import get_sld
+from rich.console import Console
+from rich.json import JSON as RichJSON
+from rich.panel import Panel
+from rich.table import Table
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APP_NAME = "openapi-cli4ai"
@@ -117,7 +118,7 @@ err_console = Console(stderr=True)
 _verbose_mode = False
 _timeout_seconds = 60.0
 _max_retries = 0
-_profile_override: Optional[str] = None
+_profile_override: str | None = None
 
 
 def set_insecure_mode(insecure: bool) -> None:
@@ -442,7 +443,7 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
         try:
             meta = json.loads(cache_meta.read_text())
             if not isinstance(meta, dict):
-                raise ValueError("cache meta is not a JSON object")
+                raise TypeError("cache meta is not a JSON object")
             age = time.time() - meta.get("fetched_at", 0)
             if age < CACHE_TTL:
                 cached_spec = json.loads(cache_file.read_text())
@@ -668,9 +669,8 @@ def extract_full_endpoint_schema(spec: dict, operation_id: str) -> dict | None:
                 # Include path params not overridden by operation params
                 merged_params = list(op_params)
                 for p in path_params:
-                    if isinstance(p, dict) and "name" in p:
-                        if (p["name"], p.get("in", "")) not in op_param_keys:
-                            merged_params.append(p)
+                    if isinstance(p, dict) and "name" in p and (p["name"], p.get("in", "")) not in op_param_keys:
+                        merged_params.append(p)
                 return {
                     "method": method.upper(),
                     "path": path,
@@ -1591,9 +1591,9 @@ def stream_sse(response: httpx.Response) -> str:
 # ── Commands: endpoints ────────────────────────────────────────────────────────
 @app.command("endpoints")
 def cmd_endpoints(
-    tag: Annotated[Optional[str], typer.Option("--tag", "-t", help="Filter by tag")] = None,
+    tag: Annotated[str | None, typer.Option("--tag", "-t", help="Filter by tag")] = None,
     search: Annotated[
-        Optional[str], typer.Option("--search", "-s", help="Search paths, summaries, and operationIds")
+        str | None, typer.Option("--search", "-s", help="Search paths, summaries, and operationIds")
     ] = None,
     show_deprecated: Annotated[bool, typer.Option("--deprecated", help="Include deprecated endpoints")] = False,
     output_format: Annotated[str, typer.Option("--format", "-f", help="Output format: table, json, compact")] = "table",
@@ -1664,14 +1664,12 @@ def cmd_endpoints(
 def cmd_call(
     method: Annotated[str, typer.Argument(help="HTTP method (GET, POST, PUT, PATCH, DELETE)")],
     path: Annotated[str, typer.Argument(help="API path (e.g., /pet/findByStatus)")],
-    body: Annotated[
-        Optional[str], typer.Option("--body", "-b", help="Request body (JSON string or @file.json)")
-    ] = None,
+    body: Annotated[str | None, typer.Option("--body", "-b", help="Request body (JSON string or @file.json)")] = None,
     query: Annotated[
-        Optional[list[str]], typer.Option("--query", "-q", help="Query params as key=value (repeatable)")
+        list[str] | None, typer.Option("--query", "-q", help="Query params as key=value (repeatable)")
     ] = None,
     header: Annotated[
-        Optional[list[str]], typer.Option("--header", "-H", help="Extra headers as Key:Value (repeatable)")
+        list[str] | None, typer.Option("--header", "-H", help="Extra headers as Key:Value (repeatable)")
     ] = None,
     stream: Annotated[bool, typer.Option("--stream", help="Stream SSE response")] = False,
     raw: Annotated[bool, typer.Option("--raw", help="Print raw response without formatting")] = False,
@@ -1690,7 +1688,7 @@ def cmd_call(
         err_console.print(f"[red]Invalid HTTP method: {method}[/red]")
         raise typer.Exit(1)
 
-    profile_name, profile = get_active_profile()
+    _profile_name, profile = get_active_profile()
 
     # Parse body
     json_body = None
@@ -1854,9 +1852,9 @@ def cmd_run(
         str, typer.Argument(help="Operation ID from the OpenAPI spec (e.g., findPetsByStatus, addPet)")
     ],
     input_data: Annotated[
-        Optional[str], typer.Option("--input", "-i", help="Input as JSON (keys auto-routed to path/query/body)")
+        str | None, typer.Option("--input", "-i", help="Input as JSON (keys auto-routed to path/query/body)")
     ] = None,
-    input_file: Annotated[Optional[str], typer.Option("--input-file", "-f", help="Read input from a JSON file")] = None,
+    input_file: Annotated[str | None, typer.Option("--input-file", "-f", help="Read input from a JSON file")] = None,
     stream: Annotated[bool, typer.Option("--stream", help="Stream SSE response")] = False,
     raw: Annotated[bool, typer.Option("--raw", help="Print raw response without formatting")] = False,
     output_json_flag: Annotated[bool, typer.Option("--json", help="Output raw JSON")] = False,
@@ -1872,7 +1870,7 @@ def cmd_run(
         openapi-cli4ai run addPet --input '{"name": "Rex", "status": "available"}'
         openapi-cli4ai run addPet --input-file pet.json
     """
-    profile_name, profile = get_active_profile()
+    _profile_name, profile = get_active_profile()
     spec = fetch_spec(profile)
 
     # Look up the operation in the spec
@@ -2075,47 +2073,45 @@ def cmd_init(
     name: Annotated[str, typer.Argument(help="Profile name (e.g., petstore, myapp)")],
     url: Annotated[str, typer.Option("--url", "-u", help="Base URL of the API")] = "",
     spec_path: Annotated[
-        Optional[str], typer.Option("--spec", "-s", help="Path to OpenAPI spec (auto-detected if omitted)")
+        str | None, typer.Option("--spec", "-s", help="Path to OpenAPI spec (auto-detected if omitted)")
     ] = None,
-    spec_url: Annotated[Optional[str], typer.Option("--spec-url", help="Full URL to OpenAPI spec file")] = None,
+    spec_url: Annotated[str | None, typer.Option("--spec-url", help="Full URL to OpenAPI spec file")] = None,
     auth_type: Annotated[
         str, typer.Option("--auth", help="Auth type: bearer, oidc, device, auto, api-key, basic, none")
     ] = "none",
     # Non-interactive auth flags
-    issuer_url: Annotated[Optional[str], typer.Option("--issuer-url", help="OIDC issuer URL for discovery")] = None,
-    client_id: Annotated[Optional[str], typer.Option("--client-id", help="OAuth client ID")] = None,
-    scopes: Annotated[Optional[str], typer.Option("--scopes", help="OAuth scopes")] = None,
+    issuer_url: Annotated[str | None, typer.Option("--issuer-url", help="OIDC issuer URL for discovery")] = None,
+    client_id: Annotated[str | None, typer.Option("--client-id", help="OAuth client ID")] = None,
+    scopes: Annotated[str | None, typer.Option("--scopes", help="OAuth scopes")] = None,
     device_config_url: Annotated[
-        Optional[str], typer.Option("--device-config-url", help="Device flow config discovery URL")
+        str | None, typer.Option("--device-config-url", help="Device flow config discovery URL")
     ] = None,
     authorize_url: Annotated[
-        Optional[str], typer.Option("--authorize-url", help="OIDC authorization endpoint URL")
+        str | None, typer.Option("--authorize-url", help="OIDC authorization endpoint URL")
     ] = None,
-    token_url: Annotated[Optional[str], typer.Option("--token-url", help="OIDC token endpoint URL")] = None,
+    token_url: Annotated[str | None, typer.Option("--token-url", help="OIDC token endpoint URL")] = None,
     token_exchange_endpoint: Annotated[
-        Optional[str], typer.Option("--token-exchange-endpoint", help="Token exchange endpoint path for two-phase auth")
+        str | None, typer.Option("--token-exchange-endpoint", help="Token exchange endpoint path for two-phase auth")
     ] = None,
-    redirect_uri: Annotated[Optional[str], typer.Option("--redirect-uri", help="OIDC redirect URI")] = None,
-    callback_port: Annotated[
-        Optional[int], typer.Option("--callback-port", help="Local callback port for OIDC")
-    ] = None,
+    redirect_uri: Annotated[str | None, typer.Option("--redirect-uri", help="OIDC redirect URI")] = None,
+    callback_port: Annotated[int | None, typer.Option("--callback-port", help="Local callback port for OIDC")] = None,
     token_env_var: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--token-env-var", help="Env var for static bearer token (skips interactive prompt)"),
     ] = None,
     token_endpoint: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--token-endpoint", help="Token endpoint path for bearer login (skips interactive prompt)"),
     ] = None,
     refresh_endpoint: Annotated[
-        Optional[str], typer.Option("--refresh-endpoint", help="Refresh endpoint path for bearer login")
+        str | None, typer.Option("--refresh-endpoint", help="Refresh endpoint path for bearer login")
     ] = None,
     api_key_env_var: Annotated[
-        Optional[str], typer.Option("--api-key-env-var", help="Env var for API key (skips interactive prompt)")
+        str | None, typer.Option("--api-key-env-var", help="Env var for API key (skips interactive prompt)")
     ] = None,
-    api_key_header: Annotated[Optional[str], typer.Option("--api-key-header", help="Header name for API key")] = None,
+    api_key_header: Annotated[str | None, typer.Option("--api-key-header", help="Header name for API key")] = None,
     api_key_prefix: Annotated[
-        Optional[str], typer.Option("--api-key-prefix", help="Header value prefix for API key")
+        str | None, typer.Option("--api-key-prefix", help="Header value prefix for API key")
     ] = None,
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip confirmation prompts (for non-interactive use)")
@@ -2153,10 +2149,13 @@ def cmd_init(
 
     # Check if profile already exists
     data = load_profiles()
-    if name in data.get("profiles", {}):
-        if not yes and not typer.confirm(f"Profile '{name}' already exists. Overwrite?"):
-            err_console.print("[yellow]Cancelled.[/yellow]")
-            raise typer.Exit(0)
+    if (
+        name in data.get("profiles", {})
+        and not yes
+        and not typer.confirm(f"Profile '{name}' already exists. Overwrite?")
+    ):
+        err_console.print("[yellow]Cancelled.[/yellow]")
+        raise typer.Exit(0)
 
     # Build profile
     profile: dict = {
@@ -2419,7 +2418,7 @@ def cmd_login(
     password: Annotated[
         str, typer.Option("--password", "-p", help="Password (avoid for special chars — use interactive prompt)")
     ] = "",
-    password_file: Annotated[Optional[str], typer.Option("--password-file", help="Read password from file")] = None,
+    password_file: Annotated[str | None, typer.Option("--password-file", help="Read password from file")] = None,
     password_stdin: Annotated[bool, typer.Option("--password-stdin", help="Read password from stdin")] = False,
     no_browser: Annotated[
         bool,
@@ -2679,7 +2678,7 @@ def _try_post_login_spec_fetch(profile: dict) -> None:
 @app.command("logout")
 def cmd_logout() -> None:
     """Clear cached authentication tokens for the active profile."""
-    profile_name, profile = get_active_profile()
+    profile_name, _profile = get_active_profile()
     token_cache = CACHE_DIR / f"{_safe_profile_name(profile_name)}_token.json"
     if token_cache.exists():
         token_cache.unlink()
@@ -2701,9 +2700,8 @@ def cmd_profile_add(
         url = typer.prompt("Base URL")
 
     data = load_profiles()
-    if name in data.get("profiles", {}):
-        if not typer.confirm(f"Profile '{name}' exists. Overwrite?"):
-            raise typer.Exit(0)
+    if name in data.get("profiles", {}) and not typer.confirm(f"Profile '{name}' exists. Overwrite?"):
+        raise typer.Exit(0)
 
     data.setdefault("profiles", {})[name] = {
         "base_url": url.rstrip("/"),
@@ -2804,7 +2802,7 @@ def cmd_profile_remove(
 
 @profile_app.command("show")
 def cmd_profile_show(
-    name: Annotated[Optional[str], typer.Argument(help="Profile name (default: active)")] = None,
+    name: Annotated[str | None, typer.Argument(help="Profile name (default: active)")] = None,
 ) -> None:
     """Show profile configuration details."""
     data = load_profiles()
@@ -2896,7 +2894,7 @@ def _load_catalog() -> list[dict]:
     return entries
 
 
-def _catalog_find(name: str) -> Optional[dict]:
+def _catalog_find(name: str) -> dict | None:
     for entry in _load_catalog():
         if name in (entry.get("_slug"), entry.get("name")):
             return entry
@@ -2963,16 +2961,18 @@ def _assert_public_url(url: str) -> None:
 def _fetch_public_spec(url: str) -> tuple[str, str]:
     """SSRF-guarded, size-capped, timeout-bounded fetch of a catalog spec URL."""
     _assert_public_url(url)
-    with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=True, max_redirects=3) as client:
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            _assert_public_url(str(resp.url))  # re-check the post-redirect host
-            content_type = resp.headers.get("content-type", "")
-            body = bytearray()
-            for chunk in resp.iter_bytes():
-                body += chunk
-                if len(body) > _CATALOG_MAX_SPEC_BYTES:
-                    raise ValueError(f"spec exceeds {_CATALOG_MAX_SPEC_BYTES // (1024 * 1024)}MB limit")
+    with (
+        httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), follow_redirects=True, max_redirects=3) as client,
+        client.stream("GET", url) as resp,
+    ):
+        resp.raise_for_status()
+        _assert_public_url(str(resp.url))  # re-check the post-redirect host
+        content_type = resp.headers.get("content-type", "")
+        body = bytearray()
+        for chunk in resp.iter_bytes():
+            body += chunk
+            if len(body) > _CATALOG_MAX_SPEC_BYTES:
+                raise ValueError(f"spec exceeds {_CATALOG_MAX_SPEC_BYTES // (1024 * 1024)}MB limit")
     return content_type, bytes(body).decode("utf-8", errors="replace")
 
 
@@ -3157,9 +3157,8 @@ def cmd_catalog_install(
 
     data = load_profiles()
     profiles = data.setdefault("profiles", {})
-    if slug in profiles and not force:
-        if not typer.confirm(f"Profile '{slug}' already exists. Overwrite?"):
-            raise typer.Exit(0)
+    if slug in profiles and not force and not typer.confirm(f"Profile '{slug}' already exists. Overwrite?"):
+        raise typer.Exit(0)
 
     profiles[slug] = _catalog_to_profile(entry)
     if use or not data.get("active_profile"):
@@ -3190,7 +3189,7 @@ def _gh_annotate(level: str, file: str, msg: str) -> None:
 
 @catalog_app.command("validate")
 def cmd_catalog_validate(
-    path: Annotated[Optional[str], typer.Argument(help="Profile TOML file to validate")] = None,
+    path: Annotated[str | None, typer.Argument(help="Profile TOML file to validate")] = None,
     validate_all: Annotated[bool, typer.Option("--all", help="Validate every profile in the catalog")] = False,
     offline: Annotated[bool, typer.Option("--offline", help="Skip the live OpenAPI spec fetch")] = False,
 ) -> None:
@@ -3243,7 +3242,7 @@ def main(
     ctx: typer.Context,
     version: Annotated[bool, typer.Option("--version", help="Show version")] = False,
     profile: Annotated[
-        Optional[str], typer.Option("--profile", "-p", help="Use this profile for this command only")
+        str | None, typer.Option("--profile", "-p", help="Use this profile for this command only")
     ] = None,
     insecure: Annotated[bool, typer.Option("--insecure", "-k", help="Disable SSL verification")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show request/response details")] = False,

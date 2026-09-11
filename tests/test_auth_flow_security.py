@@ -14,7 +14,6 @@ import pytest
 
 from openapi_cli4ai import cli as cli_mod
 
-
 # ── OAuth Bearer Flow Tests ──────────────────────────────────────────────────
 
 

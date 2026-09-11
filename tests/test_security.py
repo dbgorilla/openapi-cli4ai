@@ -11,8 +11,8 @@ import stat
 import urllib.parse
 from unittest.mock import patch
 
-import typer
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from openapi_cli4ai import cli as cli_mod
@@ -316,9 +316,8 @@ class TestOIDCStateValidation:
         """_oidc_login_no_browser should reject a redirect URL with wrong state."""
         # Mock typer.prompt to return a URL with wrong state
         wrong_url = "http://localhost:8484/callback?code=abc123&state=WRONG"
-        with patch("typer.prompt", return_value=wrong_url):
-            with pytest.raises(typer.Exit):
-                cli_mod._oidc_login_no_browser("http://auth.example.com", expected_state="CORRECT")
+        with patch("typer.prompt", return_value=wrong_url), pytest.raises(typer.Exit):
+            cli_mod._oidc_login_no_browser("http://auth.example.com", expected_state="CORRECT")
 
     def test_no_browser_accepts_correct_state(self):
         """_oidc_login_no_browser should accept a redirect URL with correct state."""
@@ -330,9 +329,8 @@ class TestOIDCStateValidation:
     def test_no_browser_rejects_missing_state(self):
         """_oidc_login_no_browser should reject a redirect URL with no state."""
         no_state_url = "http://localhost:8484/callback?code=abc123"
-        with patch("typer.prompt", return_value=no_state_url):
-            with pytest.raises(typer.Exit):
-                cli_mod._oidc_login_no_browser("http://auth.example.com", expected_state="EXPECTED")
+        with patch("typer.prompt", return_value=no_state_url), pytest.raises(typer.Exit):
+            cli_mod._oidc_login_no_browser("http://auth.example.com", expected_state="EXPECTED")
 
 
 # ── Spec Cache Cleanup Tests ─────────────────────────────────────────────────

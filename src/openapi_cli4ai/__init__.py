@@ -3,4 +3,4 @@
 from openapi_cli4ai.cli import VERSION, app
 
 __version__ = VERSION
-__all__ = ["app", "VERSION", "__version__"]
+__all__ = ["VERSION", "__version__", "app"]
