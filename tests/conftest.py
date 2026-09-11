@@ -37,6 +37,7 @@ def tmp_config(tmp_path, monkeypatch):
     for mod in (config_mod, cli_mod):
         monkeypatch.setattr(mod, "CONFIG_FILE", config_file)
         monkeypatch.setattr(mod, "CACHE_DIR", cache_dir)
+    monkeypatch.setattr(config_mod, "PROFILES_DIR", tmp_path / "profiles.d")
 
     return cli_mod, tmp_path, cache_dir
 

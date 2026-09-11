@@ -22,6 +22,12 @@ from openapi_cli4ai._ui import _verbose, err_console
 
 APP_NAME = "openapi-cli4ai"
 CONFIG_FILE = Path.home() / ".openapi-cli4ai.toml"
+# Drop-in profiles: one profile per file, named after the file stem. Read
+# alongside CONFIG_FILE; a drop-in overrides a same-named [profiles.x] entry.
+PROFILES_DIR = Path.home() / ".openapi-cli4ai" / "profiles.d"
+# load_profiles() records which profiles came from PROFILES_DIR under this key
+# so save_profiles() can route each one back to where it lives.
+_PROFILE_FILES_KEY = "_profile_files"
 CACHE_DIR = Path.home() / ".cache" / APP_NAME
 CACHE_TTL = 3600  # 1 hour
 ENV_PREFIX = "OAC_"
@@ -79,7 +85,45 @@ def _safe_profile_name(name: str) -> str:
 
 
 def load_profiles() -> dict:
-    """Load profiles from TOML config file."""
+    """Load profiles from the config file plus every drop-in under PROFILES_DIR.
+
+    Precedence: a drop-in `profiles.d/<name>.toml` overrides `[profiles.<name>]`
+    in the config file. `active_profile` and other top-level settings come only
+    from the config file. Drop-ins are read in sorted file-name order.
+    """
+    data = _load_config_file()
+    data[_PROFILE_FILES_KEY] = {}
+    if not PROFILES_DIR.is_dir():
+        return data
+    for path in sorted(PROFILES_DIR.glob("*.toml")):
+        name = path.stem
+        try:
+            profile = tomllib.loads(path.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as e:
+            err_console.print(f"[red]Error: Profile file is corrupt ({path}): {e}[/red]")
+            err_console.print("[dim]Fix the file manually or delete it.[/dim]")
+            raise typer.Exit(1)
+        except OSError as e:
+            err_console.print(f"[red]Error: Cannot read profile file ({path}): {e}[/red]")
+            raise typer.Exit(1)
+        if not isinstance(profile, dict):
+            err_console.print(f"[red]Error: Profile file has unexpected structure ({path})[/red]")
+            err_console.print("[dim]Expected top-level keys like base_url and [auth]. Fix or delete the file.[/dim]")
+            raise typer.Exit(1)
+        if name in data["profiles"]:
+            _verbose(f"{path} overrides [profiles.{name}] in {CONFIG_FILE}")
+        data["profiles"][name] = profile
+        data[_PROFILE_FILES_KEY][name] = path
+    return data
+
+
+def profile_file_path(name: str) -> Path:
+    """Where a drop-in profile called `name` lives (whether or not it exists yet)."""
+    return PROFILES_DIR / f"{name}.toml"
+
+
+def _load_config_file() -> dict:
+    """Load the monolithic TOML config file (top-level settings + [profiles])."""
     if not CONFIG_FILE.exists():
         return {"active_profile": None, "profiles": {}}
     try:
@@ -105,11 +149,36 @@ def load_profiles() -> dict:
 
 
 def save_profiles(data: dict) -> None:
-    """Save profiles to TOML config file."""
+    """Persist `data` as returned by load_profiles().
+
+    Profiles recorded as drop-ins are written to their own file (or the file is
+    deleted when the profile is gone from `data`); everything else, including
+    `active_profile`, goes to the config file. Keys starting with `_` are
+    bookkeeping and never written.
+    """
     ensure_dirs()
+    profiles: dict = data.get("profiles", {})
+    files: dict[str, Path] = data.get(_PROFILE_FILES_KEY, {})
+    for name, path in files.items():
+        if name not in profiles:
+            path.unlink(missing_ok=True)
+            continue
+        content = tomli_w.dumps(profiles[name])
+        if path.exists() and path.read_text(encoding="utf-8") == content:
+            continue  # unchanged: leave mtime alone
+        _ensure_profiles_dir()
+        _atomic_write(path, content, restricted=True)
     # TOML doesn't support None values — filter them out before writing
-    clean = {k: v for k, v in data.items() if v is not None}
+    clean = {k: v for k, v in data.items() if v is not None and not k.startswith("_")}
+    clean["profiles"] = {name: prof for name, prof in profiles.items() if name not in files}
     _atomic_write(CONFIG_FILE, tomli_w.dumps(clean), restricted=True)
+
+
+def _ensure_profiles_dir() -> None:
+    """Create PROFILES_DIR (and its parent) owner-only, like CACHE_DIR."""
+    PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+    PROFILES_DIR.parent.chmod(0o700)
+    PROFILES_DIR.chmod(0o700)
 
 
 def _resolve_env_vars(obj: Any) -> Any:
