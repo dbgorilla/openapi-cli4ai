@@ -910,38 +910,64 @@ def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str, time
     return _OIDCCallbackHandler.auth_code
 
 
+_NO_BROWSER_MAX_ATTEMPTS = 3
+
+
 def _oidc_login_no_browser(full_auth_url: str, expected_state: str | None = None) -> str:
-    """Print the auth URL, user pastes back the redirect URL containing the code."""
-    console.print("\n[bold]Open this URL in any browser to log in:[/bold]\n")
+    """Print the auth URL; the user pastes back the redirect URL or the bare code.
+
+    On a headless box the browser is usually on another machine, so the
+    localhost redirect never loads. The user copies the address the browser
+    landed on (or just the ``code`` value from it) and pastes it here.
+    """
+    console.print("\n[bold]Open this URL in any browser (it can be on another machine) and sign in:[/bold]\n")
     console.print(f"  {full_auth_url}\n")
     console.print(
-        "[dim]After login, your browser will redirect to a localhost URL.\n"
-        "Copy the full URL from your browser's address bar and paste it below.[/dim]\n"
+        "[dim]After signing in, the browser will land on a http://localhost:... page that does not load.\n"
+        "That is expected. Copy the full address from the browser's address bar and paste it below.\n"
+        "You can also paste just the value of the code= parameter.[/dim]\n"
     )
-    redirect_input = typer.prompt("Paste the redirect URL")
 
-    # Extract the authorization code from the pasted URL
-    parsed = urllib.parse.urlparse(redirect_input.strip())
-    params = urllib.parse.parse_qs(parsed.query)
+    for attempt in range(1, _NO_BROWSER_MAX_ATTEMPTS + 1):
+        redirect_input = typer.prompt("Paste the redirect URL (or the code)", default="", show_default=False).strip()
 
-    if "error" in params:
-        err_console.print(f"[red]OIDC error: {params['error'][0]}[/red]")
-        raise typer.Exit(1)
+        if redirect_input and "://" not in redirect_input and "code=" not in redirect_input:
+            # Bare authorization code: no state parameter to verify.
+            console.print("[dim]Bare code pasted; the state parameter cannot be checked.[/dim]")
+            return redirect_input
 
-    # Validate state to prevent CSRF
-    if expected_state:
-        received_state = params.get("state", [None])[0]
-        if received_state != expected_state:
-            err_console.print("[red]OIDC error: state mismatch — possible CSRF attack.[/red]")
-            err_console.print("[dim]The state parameter in the redirect URL does not match the expected value.[/dim]")
+        parsed = urllib.parse.urlparse(redirect_input)
+        params = urllib.parse.parse_qs(parsed.query)
+
+        if "error" in params:
+            err_console.print(f"[red]OIDC error: {params['error'][0]}[/red]")
             raise typer.Exit(1)
 
-    if "code" not in params:
-        err_console.print("[red]No authorization code found in the URL.[/red]")
-        err_console.print("[dim]Expected a URL like: http://localhost:.../callback?code=...&state=...[/dim]")
-        raise typer.Exit(1)
+        if "code" in params:
+            # Validate state to prevent CSRF
+            if expected_state:
+                received_state = params.get("state", [None])[0]
+                if received_state != expected_state:
+                    err_console.print("[red]OIDC error: state mismatch — possible CSRF attack.[/red]")
+                    err_console.print(
+                        "[dim]The state parameter in the redirect URL does not match the expected value.[/dim]"
+                    )
+                    raise typer.Exit(1)
+            return params["code"][0]
 
-    return params["code"][0]
+        if not redirect_input:
+            err_console.print("[red]Nothing pasted.[/red]")
+        else:
+            err_console.print("[red]No authorization code found in the pasted value.[/red]")
+        remaining = _NO_BROWSER_MAX_ATTEMPTS - attempt
+        if remaining:
+            err_console.print(
+                "[dim]Expected a URL like http://localhost:.../callback?code=...&state=... "
+                f"or just the code. {remaining} attempt(s) left.[/dim]"
+            )
+
+    err_console.print(f"[red]No authorization code received after {_NO_BROWSER_MAX_ATTEMPTS} attempts.[/red]")
+    raise typer.Exit(1)
 
 
 def _oidc_exchange_code(

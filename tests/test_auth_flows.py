@@ -521,6 +521,36 @@ class TestOidcLoginNoBrowser:
         with patch("typer.prompt", return_value=redirect_url), pytest.raises((SystemExit, ClickExit)):
             cli_mod._oidc_login_no_browser("https://idp/auth?...")
 
+    def test_full_url_with_matching_state(self):
+        redirect_url = "http://localhost:8484/callback?code=nb-code-abc&state=s123"
+        with patch("typer.prompt", return_value=redirect_url):
+            result = cli_mod._oidc_login_no_browser("https://idp/auth?...", expected_state="s123")
+        assert result == "nb-code-abc"
+
+    def test_full_url_with_wrong_state_rejected(self):
+        redirect_url = "http://localhost:8484/callback?code=nb-code-abc&state=other"
+        with patch("typer.prompt", return_value=redirect_url) as prompt, pytest.raises((SystemExit, ClickExit)):
+            cli_mod._oidc_login_no_browser("https://idp/auth?...", expected_state="s123")
+        # A state mismatch is a hard failure, not a retry.
+        assert prompt.call_count == 1
+
+    def test_bare_code_accepted(self):
+        with patch("typer.prompt", return_value="  bare-code-xyz  "):
+            result = cli_mod._oidc_login_no_browser("https://idp/auth?...", expected_state="s123")
+        assert result == "bare-code-xyz"
+
+    def test_empty_input_then_valid_url_on_retry(self):
+        redirect_url = "http://localhost:8484/callback?code=nb-code-abc&state=s123"
+        with patch("typer.prompt", side_effect=["", redirect_url]) as prompt:
+            result = cli_mod._oidc_login_no_browser("https://idp/auth?...", expected_state="s123")
+        assert result == "nb-code-abc"
+        assert prompt.call_count == 2
+
+    def test_gives_up_after_three_bad_inputs(self):
+        with patch("typer.prompt", return_value="") as prompt, pytest.raises((SystemExit, ClickExit)):
+            cli_mod._oidc_login_no_browser("https://idp/auth?...")
+        assert prompt.call_count == 3
+
 
 # ===========================================================================
 # 8. _oidc_exchange_code
