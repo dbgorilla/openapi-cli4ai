@@ -86,7 +86,7 @@ def test_fetch_failure_uses_stale_cache_then_bundled(online, monkeypatch):
     # no cache yet: bundled only
     monkeypatch.setattr(catalog, "_download_index", boom)
     slugs = {e["_slug"] for e in catalog._load_catalog()}
-    assert slugs == {"petstore", "xquik"}
+    assert slugs == {"dbgorilla", "petstore", "xquik"}
 
     # a stale cache beats bundled when the fetch fails
     catalog.config.ensure_dirs()
@@ -100,7 +100,7 @@ def test_fetch_failure_uses_stale_cache_then_bundled(online, monkeypatch):
 def test_malformed_index_is_ignored(online, monkeypatch):
     monkeypatch.setattr(catalog, "_download_index", lambda: {"version": 99, "profiles": "nope"})
     slugs = {e["_slug"] for e in catalog._load_catalog()}
-    assert slugs == {"petstore", "xquik"}
+    assert slugs == {"dbgorilla", "petstore", "xquik"}
     assert not catalog._index_cache_path().exists(), "a malformed document is not cached"
 
 
@@ -148,9 +148,9 @@ def test_index_command_round_trips_and_check(tmp_config, tmp_path):
     assert result.exit_code == 0, result.output
     index = json.loads(target.read_text())
     assert index["version"] == catalog.CATALOG_INDEX_VERSION
-    assert {p["slug"] for p in index["profiles"]} == {"petstore", "xquik"}
+    assert {p["slug"] for p in index["profiles"]} == {"dbgorilla", "petstore", "xquik"}
     entries = catalog._index_to_entries(index)
-    assert {e["_slug"] for e in entries} == {"petstore", "xquik"}
+    assert {e["_slug"] for e in entries} == {"dbgorilla", "petstore", "xquik"}
     assert runner.invoke(app, ["catalog", "index", str(target), "--check"]).exit_code == 0
     target.write_text("{}")
     assert runner.invoke(app, ["catalog", "index", str(target), "--check"]).exit_code == 1

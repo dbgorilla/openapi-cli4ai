@@ -1,0 +1,16 @@
+# Community catalog profile.
+name = "dbgorilla"
+description = "DBGorilla database performance tools over MCP, read-only tool set"
+maintainer = "dbgorilla"
+source = "https://app.dbgorilla.com"
+
+base_url = "https://app.dbgorilla.com"
+# The read-only tool set leaves out tools that create, change or delete things.
+mcp_url = "https://app.dbgorilla.com/mcp/readonly"
+read_only = true
+
+[auth]
+# 'login' signs in through the browser; endpoints and the client are discovered.
+# Or set DBGORILLA_API_KEY (Profile > MCP Access in DBGorilla) and skip login.
+type = "oidc"
+token_env_var = "DBGORILLA_API_KEY"

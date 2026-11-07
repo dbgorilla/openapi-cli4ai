@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- MCP server profiles: `mcp_url` (or `profile add --mcp-url`) lists an MCP server's tools in `endpoints` and calls them with `run` (Streamable HTTP, JSON or SSE replies)
+- OIDC sign-in with only a URL: discovers endpoints (RFC 9728, RFC 8414) and registers a client (RFC 7591); sends the RFC 8707 `resource`; caches the registration for refresh
+- `token_env_var` on an `oidc` profile: an API key in that variable is used instead of login
+- Read-only mode: `read_only = true`, `--read-only` or `OAC_READ_ONLY=1` allows only safe HTTP methods and MCP tools marked `readOnlyHint`
+- `run` accepts `key=value` inputs, typed from the schema
+- `logout` revokes the token (RFC 7009) when the server supports it; `--forget-client` drops the registration
+- Catalog: `dbgorilla` community profile (read-only MCP tool set); `catalog validate` checks `mcp_url` endpoints
+
 ## [0.7.0] - 2026-09-11
 
 ### Added
