@@ -175,12 +175,22 @@ def tool_signature(name: str, schema: dict) -> str:
     return f"{name}({', '.join(args)})"
 
 
+def _pretty_if_json(text: str) -> str:
+    """Indent text that is a JSON object or array; leave everything else as is."""
+    if not text.lstrip().startswith(("{", "[")):
+        return text
+    try:
+        return json.dumps(json.loads(text), indent=2)
+    except json.JSONDecodeError:
+        return text
+
+
 def result_text(result: dict) -> str:
     """Join the text parts of a tool result; describe the non-text parts."""
     parts = []
     for item in result.get("content") or []:
         if item.get("type") == "text":
-            parts.append(item.get("text", ""))
+            parts.append(_pretty_if_json(item.get("text", "")))
         elif item.get("type") == "resource" and isinstance(item.get("resource"), dict):
             parts.append(item["resource"].get("text") or f"[resource {item['resource'].get('uri', '')}]")
         else:

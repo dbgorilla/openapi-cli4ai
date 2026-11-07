@@ -1020,7 +1020,9 @@ def _oidc_login(
     if no_browser:
         auth_code = _oidc_login_no_browser(full_auth_url, expected_state=state)
     else:
-        auth_code = _oidc_login_browser(full_auth_url, callback_port, state, timeout=callback_timeout)
+        auth_code = _oidc_login_browser(
+            full_auth_url, callback_port, state, timeout=callback_timeout, callback_url=redirect_uri
+        )
 
     # Exchange code for tokens
     _oidc_exchange_code(
@@ -1036,7 +1038,9 @@ def _oidc_login(
     )
 
 
-def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str, timeout: int = 120) -> str:
+def _oidc_login_browser(
+    full_auth_url: str, callback_port: int, state: str, timeout: int = 120, callback_url: str = ""
+) -> str:
     """Open browser and listen for the OIDC callback on localhost."""
     _OIDCCallbackHandler.auth_code = None
     _OIDCCallbackHandler.error = None
@@ -1053,7 +1057,7 @@ def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str, time
 
     server.timeout = timeout
 
-    err_console.print(f"[dim]Listening on http://localhost:{callback_port}/callback[/dim]")
+    err_console.print(f"[dim]Listening on {callback_url or f'http://localhost:{callback_port}/callback'}[/dim]")
     console.print("[bold]Opening browser for login...[/bold]")
     webbrowser.open(full_auth_url)
     console.print(f"[dim]Waiting for callback ({timeout}s timeout)...[/dim]")

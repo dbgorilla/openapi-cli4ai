@@ -132,7 +132,9 @@ def server(monkeypatch, tmp_config):
 def _browser_login(monkeypatch, server: FakeServer) -> None:
     """Stand in for the browser: check the authorize URL, hand back a code."""
 
-    def fake_browser(full_auth_url: str, callback_port: int, state: str, timeout: int = 120) -> str:
+    def fake_browser(
+        full_auth_url: str, callback_port: int, state: str, timeout: int = 120, callback_url: str = ""
+    ) -> str:
         q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(full_auth_url).query))
         assert full_auth_url.startswith(f"{HOST}/mcp/authorize?")
         assert q["client_id"] == "dyn-client"
@@ -242,3 +244,10 @@ def test_tools_to_spec_marks_read_only():
     ops = {p["post"]["operationId"]: p["post"] for p in spec["paths"].values()}
     assert ops["list_things"]["x-read-only"] is True
     assert ops["delete_thing"]["x-read-only"] is False
+
+
+def test_json_text_results_are_indented():
+    out = mcp_mod.result_text(
+        {"content": [{"type": "text", "text": '[{"a":1}]'}, {"type": "text", "text": "#5 plain"}]}
+    )
+    assert out == '[\n  {\n    "a": 1\n  }\n]\n#5 plain'
