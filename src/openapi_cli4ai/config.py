@@ -246,7 +246,9 @@ def _spec_cache_paths(spec_url: str) -> tuple[Path, Path]:
 
 
 def _resolve_spec_url(profile: dict) -> str:
-    """Determine the full URL for fetching the OpenAPI spec."""
+    """Determine the full URL for fetching the OpenAPI spec (or the MCP server's tool list)."""
+    if profile.get("mcp_url"):
+        return profile["mcp_url"]
     if profile.get("openapi_url"):
         return profile["openapi_url"]
     base = profile["base_url"].rstrip("/")

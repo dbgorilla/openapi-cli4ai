@@ -11,6 +11,8 @@ _verbose_mode = False
 _timeout_seconds = 60.0
 _max_retries = 0
 _profile_override: str | None = None
+# --read-only flag; a profile can also set read_only = true.
+_read_only = False
 
 
 def set_insecure_mode(insecure: bool) -> None:

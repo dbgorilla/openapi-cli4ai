@@ -157,6 +157,23 @@ def _parse_openapi_text(content_type: str, text: str) -> Any:
         return yaml.safe_load(text)
 
 
+def _check_mcp_endpoint(url: str) -> str | None:
+    """An MCP endpoint answers initialize with 200, or 401 plus a WWW-Authenticate challenge."""
+    try:
+        _assert_public_url(url)
+        resp = httpx.post(
+            url,
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            headers={"Accept": "application/json, text/event-stream"},
+            timeout=15,
+        )
+    except (httpx.HTTPError, ValueError) as exc:
+        return f"mcp_url not reachable: {exc}"
+    if resp.status_code == 200 or (resp.status_code == 401 and resp.headers.get("www-authenticate")):
+        return None
+    return f"mcp_url did not answer like an MCP server (HTTP {resp.status_code})"
+
+
 def _validate_catalog_entry(entry: dict, *, check_spec: bool) -> tuple[list[str], list[str]]:
     """Return (errors, warnings) for one catalog entry. Errors block a submission."""
     errors: list[str] = []
@@ -189,8 +206,10 @@ def _validate_catalog_entry(entry: dict, *, check_spec: bool) -> tuple[list[str]
             errors.append(f"{field} must be an https:// URL")
     if entry.get("openapi_url") and not str(entry["openapi_url"]).startswith("https://"):
         errors.append("openapi_url must be an https:// URL")
-    if not entry.get("openapi_url") and not entry.get("openapi_path"):
-        errors.append("provide either openapi_url or openapi_path")
+    if entry.get("mcp_url") and not str(entry["mcp_url"]).startswith("https://"):
+        errors.append("mcp_url must be an https:// URL")
+    if not entry.get("openapi_url") and not entry.get("openapi_path") and not entry.get("mcp_url"):
+        errors.append("provide openapi_url, openapi_path or mcp_url")
 
     auth = entry.get("auth")
     if not isinstance(auth, dict) or auth.get("type") not in _CATALOG_AUTH_TYPES:
@@ -232,7 +251,12 @@ def _validate_catalog_entry(entry: dict, *, check_spec: bool) -> tuple[list[str]
             if problem:
                 errors.append(problem)
 
-    if check_spec:
+    if check_spec and entry.get("mcp_url"):
+        # MCP tool lists usually need sign-in; check the endpoint answers like one.
+        problem = _check_mcp_endpoint(str(entry["mcp_url"]))
+        if problem:
+            errors.append(problem)
+    elif check_spec:
         profile = _catalog_to_profile(entry)
         try:
             spec_url = _resolve_spec_url(profile)

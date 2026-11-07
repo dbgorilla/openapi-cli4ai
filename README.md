@@ -77,6 +77,39 @@ Nothing is injected into the prompt upfront. The agent pulls what it needs, when
 
 This isn't MCP vs. OpenAPI. It's about having both tools and reaching for the right one. For quick integrations, MCP is great. For large or unfamiliar API surfaces, an OpenAPI spec and a thin CLI is the better play.
 
+## MCP servers, browser sign-in, read-only mode
+
+A profile can point at an MCP (Model Context Protocol) server instead of an
+OpenAPI spec. Its tools show up in `endpoints` and run with `run`.
+
+```bash
+openapi-cli4ai profile add myserver --mcp-url https://example.com/mcp --read-only
+openapi-cli4ai login                    # browser sign-in
+openapi-cli4ai endpoints -f compact     # TOOL  list_things(owner: string, limit?: integer)
+openapi-cli4ai run list_things owner=me limit=3
+openapi-cli4ai logout                   # revokes the token, clears the cache
+```
+
+**Browser sign-in without config.** With `auth.type = "oidc"` and no
+`authorize_url`/`token_url`/`client_id`, `login` finds them from the server's
+standard metadata (RFC 9728 protected-resource metadata, RFC 8414
+authorization-server metadata) and registers itself as a client (RFC 7591).
+It uses PKCE (S256) and a `127.0.0.1` callback. The token is cached and
+refreshed. `--no-browser` prints the link instead, for SSH. `logout
+--forget-client` also drops the registration.
+
+**API key instead.** Set `token_env_var` in the `[auth]` table (or
+`--token-env` on `profile add`). When that variable is set, its value is sent
+as a bearer token and no login is needed.
+
+**Read-only mode.** `read_only = true` in a profile, `--read-only`, or
+`OAC_READ_ONLY=1`. Only GET/HEAD/OPTIONS requests and MCP tools marked
+`readOnlyHint` are listed or allowed; anything else is refused before a
+request is sent.
+
+**`key=value` inputs.** `run` takes `key=value` words, typed from the schema
+(`limit=3` is a number, `owner=007` stays a string). They merge over `--input`.
+
 ## Commands
 
 ### `init` — Point it at an API

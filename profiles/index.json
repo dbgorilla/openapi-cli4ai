@@ -2,6 +2,21 @@
   "profiles": [
     {
       "auth": {
+        "token_env_var": "DBGORILLA_API_KEY",
+        "type": "oidc"
+      },
+      "base_url": "https://app.dbgorilla.com",
+      "description": "DBGorilla database performance tools over MCP, read-only tool set",
+      "maintainer": "dbgorilla",
+      "mcp_url": "https://app.dbgorilla.com/mcp/readonly",
+      "name": "dbgorilla",
+      "read_only": true,
+      "slug": "dbgorilla",
+      "source": "https://app.dbgorilla.com",
+      "tier": "community"
+    },
+    {
+      "auth": {
         "env_var": "XQUIK_API_KEY",
         "header": "x-api-key",
         "type": "api-key"

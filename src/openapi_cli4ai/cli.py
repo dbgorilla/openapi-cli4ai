@@ -57,7 +57,8 @@ from rich.table import Table
 from rich.text import Text
 from typer.core import TyperGroup
 
-from openapi_cli4ai import _state
+from openapi_cli4ai import _state, oauth_discovery
+from openapi_cli4ai import mcp as mcp_mod
 from openapi_cli4ai._state import get_verify_ssl, set_insecure_mode
 from openapi_cli4ai._ui import _verbose, console, err_console
 from openapi_cli4ai.catalog import (
@@ -345,33 +346,10 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
         except (typer.Exit, httpx.HTTPError, OSError, KeyError, TypeError, ValueError, AttributeError) as e:
             _verbose(f"Auth headers unavailable for spec fetch: {e}")
 
-        with _make_client(verify=verify) as client:
-            resp = client.get(spec_url, headers=headers)
-            resp.raise_for_status()
-
-        # Validate response is actually a spec, not HTML from a frontend SPA
-        content_type = resp.headers.get("content-type", "")
-        if "html" in content_type:
-            raise ValueError(
-                f"Got HTML instead of OpenAPI spec from {spec_url} — the server may have a frontend catch-all route"
-            )
-
-        # Handle JSON or YAML. Some servers serve a YAML spec under a
-        # non-obvious media type — e.g. Codecov's schema endpoint returns
-        # "application/vnd.oai.openapi" (the standard OpenAPI YAML type),
-        # which contains neither "yaml" nor a ".yaml" suffix. Prefer JSON
-        # when the type says so (covers the "+json" variant), route known
-        # YAML types to the YAML parser, and fall back to YAML if a body
-        # not advertised as JSON fails to decode.
-        ct = content_type.lower()
-        is_yaml = "yaml" in ct or "vnd.oai.openapi" in ct or spec_url.endswith((".yaml", ".yml"))
-        if is_yaml and "json" not in ct:
-            spec = yaml.safe_load(resp.text)
+        if profile.get("mcp_url"):
+            spec = _fetch_mcp_spec(profile, headers, verify)
         else:
-            try:
-                spec = resp.json()
-            except json.JSONDecodeError:
-                spec = yaml.safe_load(resp.text)
+            spec = _fetch_openapi_spec(spec_url, headers, verify)
 
         # Write cache atomically to prevent partial writes
         ensure_dirs()
@@ -380,7 +358,13 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
 
         return spec
 
-    except (httpx.HTTPError, json.JSONDecodeError, yaml.YAMLError, ValueError, OSError) as e:
+    except mcp_mod.MCPAuthError:
+        err_console.print(f"[red]{spec_url} needs you to sign in.[/red]")
+        err_console.print(
+            "[dim]Run 'openapi-cli4ai login', or set the API key environment variable for this profile.[/dim]"
+        )
+        raise typer.Exit(1)
+    except (httpx.HTTPError, json.JSONDecodeError, yaml.YAMLError, ValueError, OSError, mcp_mod.MCPError) as e:
         # Fallback to stale cache on network, parse, or I/O errors
         if cache_file.exists():
             err_console.print(f"[yellow]Warning: Using stale cached spec ({e})[/yellow]")
@@ -392,7 +376,75 @@ def fetch_spec(profile: dict, refresh: bool = False) -> dict:
         raise typer.Exit(1)
 
 
+def _mcp_session(client: httpx.Client, profile: dict, headers: dict) -> mcp_mod.MCPSession:
+    return mcp_mod.MCPSession(client, profile["mcp_url"], headers, APP_NAME, VERSION)
+
+
+def _fetch_mcp_spec(profile: dict, headers: dict, verify: bool) -> dict:
+    """List an MCP server's tools and present them as an OpenAPI document."""
+    with _make_client(verify=verify) as client, _mcp_session(client, profile, headers) as session:
+        tools = session.list_tools()
+        return mcp_mod.tools_to_spec(tools, session.server_info)
+
+
+def _fetch_openapi_spec(spec_url: str, headers: dict, verify: bool) -> dict:
+    """Download and parse an OpenAPI document (JSON or YAML)."""
+    with _make_client(verify=verify) as client:
+        resp = client.get(spec_url, headers=headers)
+        resp.raise_for_status()
+
+    # Validate response is actually a spec, not HTML from a frontend SPA
+    content_type = resp.headers.get("content-type", "")
+    if "html" in content_type:
+        raise ValueError(
+            f"Got HTML instead of OpenAPI spec from {spec_url} — the server may have a frontend catch-all route"
+        )
+
+    # Handle JSON or YAML. Some servers serve a YAML spec under a
+    # non-obvious media type — e.g. Codecov's schema endpoint returns
+    # "application/vnd.oai.openapi" (the standard OpenAPI YAML type),
+    # which contains neither "yaml" nor a ".yaml" suffix. Prefer JSON
+    # when the type says so (covers the "+json" variant), route known
+    # YAML types to the YAML parser, and fall back to YAML if a body
+    # not advertised as JSON fails to decode.
+    ct = content_type.lower()
+    is_yaml = "yaml" in ct or "vnd.oai.openapi" in ct or spec_url.endswith((".yaml", ".yml"))
+    if is_yaml and "json" not in ct:
+        spec = yaml.safe_load(resp.text)
+    else:
+        try:
+            spec = resp.json()
+        except json.JSONDecodeError:
+            spec = yaml.safe_load(resp.text)
+    return spec
+
+
 # ── Endpoint Extraction ───────────────────────────────────────────────────────
+READ_ONLY_METHODS = ("GET", "HEAD", "OPTIONS")
+
+
+def _operation_is_read_only(method: str, operation: dict) -> bool:
+    """MCP tools carry their own readOnlyHint; HTTP operations are read-only when the method is safe."""
+    if "x-read-only" in operation:
+        return operation["x-read-only"] is True
+    return method.upper() in READ_ONLY_METHODS
+
+
+def _read_only_active(profile: dict) -> bool:
+    """Read-only mode: the --read-only flag, OAC_READ_ONLY=1, or read_only = true in the profile."""
+    env = os.environ.get("OAC_READ_ONLY", "").lower() in ("1", "true", "yes")
+    return _state._read_only or env or bool(profile.get("read_only"))
+
+
+def _refuse_if_not_read_only(profile: dict, read_only_op: bool, label: str) -> None:
+    if _read_only_active(profile) and not read_only_op:
+        err_console.print(f"[red]Read-only mode: refusing {label}, which can change data.[/red]")
+        err_console.print(
+            "[dim]Read-only mode allows GET/HEAD/OPTIONS requests and MCP tools marked readOnlyHint.[/dim]"
+        )
+        raise typer.Exit(1)
+
+
 def extract_endpoint_summaries(spec: dict) -> list[dict]:
     """Extract compact endpoint summaries from an OpenAPI spec."""
     endpoints = []
@@ -415,6 +467,7 @@ def extract_endpoint_summaries(spec: dict) -> list[dict]:
                     "summary": summary,
                     "tags": operation.get("tags", []),
                     "deprecated": operation.get("deprecated", False),
+                    "read_only": _operation_is_read_only(method, operation),
                 }
             )
     return endpoints
@@ -562,6 +615,8 @@ def extract_full_endpoint_schema(spec: dict, operation_id: str) -> dict | None:
                     "parameters": merged_params,
                     "requestBody": resolved.get("requestBody"),
                     "responses": _summarize_responses(resolved.get("responses", {})),
+                    "mcp_tool": operation.get("x-mcp-tool"),
+                    "read_only": _operation_is_read_only(method, operation),
                 }
     return None
 
@@ -709,8 +764,17 @@ def _try_refresh_token(profile: dict, auth_config: dict, cached: dict) -> dict |
 
 
 def _oidc_auth(profile: dict, auth_config: dict, quiet: bool = False) -> dict:
-    """Handle OIDC auth -- cached token with form-encoded refresh."""
+    """Handle OIDC auth -- cached token with form-encoded refresh.
+
+    If ``token_env_var`` is set and that variable is present, its value is
+    sent as a bearer token instead (an API key). One profile then serves both
+    browser sign-in and scripts.
+    """
+    env_var = auth_config.get("token_env_var")
+    if env_var and os.environ.get(env_var):
+        return {"Authorization": f"{auth_config.get('prefix', 'Bearer ')}{os.environ[env_var]}"}
     profile_name = profile.get("_name", "default")
+    auth_config = _with_registered_client(profile_name, auth_config)
     token_cache = CACHE_DIR / f"{_safe_profile_name(profile_name)}_token.json"
 
     if token_cache.exists():
@@ -747,21 +811,110 @@ def _oidc_refresh(auth_config: dict, cached: dict, verify: bool = True) -> dict 
     client_id = auth_config.get("client_id", "")
     if not token_url or not client_id:
         return None
+    data = {
+        "grant_type": "refresh_token",
+        "client_id": client_id,
+        "refresh_token": cached["refresh_token"],
+    }
+    data.update(_client_extras(auth_config))
     try:
         with _make_client(verify=verify, follow_redirects=False) as client:
-            resp = client.post(
-                token_url,
-                data={
-                    "grant_type": "refresh_token",
-                    "client_id": client_id,
-                    "refresh_token": cached["refresh_token"],
-                },
-            )
+            resp = client.post(token_url, data=data)
             if resp.status_code == 200:
                 return resp.json()
     except (httpx.HTTPError, json.JSONDecodeError, KeyError):
         pass
     return None
+
+
+def _client_registration_path(profile_name: str) -> Path:
+    return CACHE_DIR / f"{_safe_profile_name(profile_name)}_oauth_client.json"
+
+
+def _load_client_registration(profile_name: str) -> dict:
+    path = _client_registration_path(profile_name)
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _with_registered_client(profile_name: str, auth_config: dict) -> dict:
+    """Overlay discovered endpoints and the registered client; the profile's own keys win."""
+    registered = _load_client_registration(profile_name)
+    if not registered:
+        return auth_config
+    return {**registered, **{k: v for k, v in auth_config.items() if v}}
+
+
+def _client_extras(auth_config: dict) -> dict:
+    """Token-request fields beyond client_id: a registered secret and the RFC 8707 resource."""
+    extras = {}
+    if auth_config.get("client_secret"):
+        extras["client_secret"] = auth_config["client_secret"]
+    if auth_config.get("resource"):
+        extras["resource"] = auth_config["resource"]
+    return extras
+
+
+def _discover_and_register(profile_name: str, auth_config: dict, resource_url: str, verify: bool) -> dict:
+    """Fill in OAuth endpoints and a client_id from server metadata, caching the result.
+
+    The registration is reused on later logins and refreshes. It is redone
+    when the profile now points at a different URL.
+    """
+    target = auth_config.get("issuer_url") or resource_url
+    cached = _load_client_registration(profile_name)
+    if cached.get("_for") == target and cached.get("client_id"):
+        return _with_registered_client(profile_name, auth_config)
+    if not target:
+        err_console.print(
+            "[red]OIDC auth needs authorize_url, token_url and client_id, or a URL to discover them from.[/red]"
+        )
+        raise typer.Exit(1)
+
+    callback_port = auth_config.get("callback_port", 8484)
+    redirect_uri = auth_config.get("redirect_uri", f"http://127.0.0.1:{callback_port}/callback")
+    try:
+        with _make_client(verify=verify, follow_redirects=True) as client:
+            found = oauth_discovery.discover(client, resource_url or target, issuer=auth_config.get("issuer_url"))
+            if not auth_config.get("client_id"):
+                if not found.get("registration_endpoint"):
+                    raise oauth_discovery.DiscoveryError(
+                        "The server does not allow client registration; set client_id in the profile."
+                    )
+                reg = oauth_discovery.register_client(
+                    client, found["registration_endpoint"], redirect_uri, f"{APP_NAME} ({profile_name})"
+                )
+                found["client_id"] = reg["client_id"]
+                if reg.get("client_secret"):
+                    found["client_secret"] = reg["client_secret"]
+                found["redirect_uri"] = redirect_uri
+    except oauth_discovery.DiscoveryError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    found["_for"] = target
+    found["_discovered"] = True
+    ensure_dirs()
+    _atomic_write(_client_registration_path(profile_name), json.dumps(found), restricted=True)
+    err_console.print(f"[dim]Found sign-in server {found.get('issuer', found['authorize_url'])}[/dim]")
+    return _with_registered_client(profile_name, auth_config)
+
+
+def _revoke_token(auth_config: dict, token: str, verify: bool) -> bool:
+    """Best-effort RFC 7009 revocation. Returns True if the server accepted it."""
+    endpoint = auth_config.get("revocation_endpoint")
+    if not endpoint or not token or not auth_config.get("client_id"):
+        return False
+    data = {"token": token, "client_id": auth_config["client_id"]}
+    if auth_config.get("client_secret"):
+        data["client_secret"] = auth_config["client_secret"]
+    try:
+        with _make_client(verify=verify, follow_redirects=False) as client:
+            return client.post(endpoint, data=data).status_code == 200
+    except httpx.HTTPError:
+        return False
 
 
 class _OIDCCallbackHandler(BaseHTTPRequestHandler):
@@ -815,17 +968,24 @@ def _oidc_login(
     verify: bool = True,
     base_url: str = "",
     force_login: bool = False,
+    resource_url: str = "",
 ) -> None:
     """Run OIDC Authorization Code + PKCE flow.
+
+    Endpoints and client_id missing from the profile are discovered from
+    ``issuer_url`` or ``resource_url`` and registered dynamically.
 
     With browser (default): opens browser, listens on localhost for callback.
     Without browser (--no-browser): prints URL, user pastes redirect URL back.
     With force_login: adds prompt=login to bypass cached IdP session.
     """
+    if not (auth_config.get("authorize_url") and auth_config.get("token_url") and auth_config.get("client_id")):
+        auth_config = _discover_and_register(profile_name, auth_config, resource_url or base_url, verify)
     authorize_url = auth_config.get("authorize_url", "")
     token_url = auth_config.get("token_url", "")
     client_id = auth_config.get("client_id", "")
-    scopes = auth_config.get("scopes", "openid")
+    # Discovered servers get no default scope: an unknown scope like "openid" can be refused.
+    scopes = auth_config.get("scopes", "" if auth_config.get("_discovered") else "openid")
     callback_port = auth_config.get("callback_port", 8484)
     callback_timeout = auth_config.get("callback_timeout", 120)
     redirect_uri = auth_config.get("redirect_uri", f"http://localhost:{callback_port}/callback")
@@ -844,11 +1004,14 @@ def _oidc_login(
         "response_type": "code",
         "client_id": client_id,
         "redirect_uri": redirect_uri,
-        "scope": scopes,
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
     }
+    if scopes:
+        params["scope"] = scopes
+    if auth_config.get("resource"):
+        params["resource"] = auth_config["resource"]
     if force_login:
         params["prompt"] = "login"
     auth_params = urllib.parse.urlencode(params)
@@ -857,7 +1020,9 @@ def _oidc_login(
     if no_browser:
         auth_code = _oidc_login_no_browser(full_auth_url, expected_state=state)
     else:
-        auth_code = _oidc_login_browser(full_auth_url, callback_port, state, timeout=callback_timeout)
+        auth_code = _oidc_login_browser(
+            full_auth_url, callback_port, state, timeout=callback_timeout, callback_url=redirect_uri
+        )
 
     # Exchange code for tokens
     _oidc_exchange_code(
@@ -873,7 +1038,9 @@ def _oidc_login(
     )
 
 
-def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str, timeout: int = 120) -> str:
+def _oidc_login_browser(
+    full_auth_url: str, callback_port: int, state: str, timeout: int = 120, callback_url: str = ""
+) -> str:
     """Open browser and listen for the OIDC callback on localhost."""
     _OIDCCallbackHandler.auth_code = None
     _OIDCCallbackHandler.error = None
@@ -890,7 +1057,7 @@ def _oidc_login_browser(full_auth_url: str, callback_port: int, state: str, time
 
     server.timeout = timeout
 
-    err_console.print(f"[dim]Listening on http://localhost:{callback_port}/callback[/dim]")
+    err_console.print(f"[dim]Listening on {callback_url or f'http://localhost:{callback_port}/callback'}[/dim]")
     console.print("[bold]Opening browser for login...[/bold]")
     webbrowser.open(full_auth_url)
     console.print(f"[dim]Waiting for callback ({timeout}s timeout)...[/dim]")
@@ -985,16 +1152,15 @@ def _oidc_exchange_code(
     """Exchange an authorization code for tokens and cache them."""
     try:
         with _make_client(verify=verify, follow_redirects=False) as client:
-            resp = client.post(
-                token_url,
-                data={
-                    "grant_type": "authorization_code",
-                    "client_id": client_id,
-                    "code": auth_code,
-                    "redirect_uri": redirect_uri,
-                    "code_verifier": code_verifier,
-                },
-            )
+            data = {
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "code": auth_code,
+                "redirect_uri": redirect_uri,
+                "code_verifier": code_verifier,
+            }
+            data.update(_client_extras(auth_config or {}))
+            resp = client.post(token_url, data=data)
 
         if resp.status_code != 200:
             err_console.print(f"[red]Token exchange failed ({resp.status_code}):[/red]")
@@ -1511,6 +1677,22 @@ def cmd_endpoints(
     profile_name, profile = get_active_profile()
     spec = fetch_spec(profile, refresh=refresh)
     eps = extract_endpoint_summaries(spec)
+    is_mcp = bool(spec.get("x-mcp"))
+    if is_mcp:
+        # Show tools as signatures: name(arg: type, optional?: type)
+        for ep in eps:
+            full = extract_full_endpoint_schema(spec, ep["operationId"]) or {}
+            schema = (
+                ((full.get("requestBody") or {}).get("content") or {}).get("application/json", {}).get("schema", {})
+            )
+            ep["method"] = "TOOL"
+            ep["path"] = mcp_mod.tool_signature(ep["operationId"], schema)
+
+    hidden_by_read_only = 0
+    if _read_only_active(profile):
+        kept = [e for e in eps if e.get("read_only")]
+        hidden_by_read_only = len(eps) - len(kept)
+        eps = kept
 
     # Filters
     if not show_deprecated:
@@ -1529,6 +1711,9 @@ def cmd_endpoints(
                 or search_lower in e.get("operationId", "").lower()
             )
         ]
+
+    if hidden_by_read_only:
+        err_console.print(f"[dim]Read-only mode: hiding {hidden_by_read_only} operation(s) that can change data.[/dim]")
 
     if not eps:
         console.print("[dim]No endpoints found.[/dim]")
@@ -1597,6 +1782,11 @@ def cmd_call(
         raise typer.Exit(1)
 
     _profile_name, profile = get_active_profile()
+    if profile.get("mcp_url"):
+        err_console.print("[red]This profile is an MCP server; it has tools, not HTTP paths.[/red]")
+        err_console.print("[dim]Use: openapi-cli4ai run <tool> key=value ...   (list tools with 'endpoints')[/dim]")
+        raise typer.Exit(1)
+    _refuse_if_not_read_only(profile, method in READ_ONLY_METHODS, f"{method} {path}")
 
     # Parse body
     json_body = None
@@ -1766,8 +1956,11 @@ def cmd_run(
     stream: Annotated[bool, typer.Option("--stream", help="Stream SSE response")] = False,
     raw: Annotated[bool, typer.Option("--raw", help="Print raw response without formatting")] = False,
     output_json_flag: Annotated[bool, typer.Option("--json", help="Output raw JSON")] = False,
+    arguments: Annotated[
+        list[str] | None, typer.Argument(help="Inputs as key=value, typed by the schema (merged over --input)")
+    ] = None,
 ) -> None:
-    """Run an API operation by name. Inputs are auto-routed to the right place.
+    """Run an API operation (or MCP tool) by name. Inputs are auto-routed to the right place.
 
     The spec defines where each parameter goes (path, query, header, body).
     You just pass a flat JSON object and the tool figures it out.
@@ -1777,6 +1970,7 @@ def cmd_run(
         openapi-cli4ai run getPetById --input '{"petId": 123}'
         openapi-cli4ai run addPet --input '{"name": "Rex", "status": "available"}'
         openapi-cli4ai run addPet --input-file pet.json
+        openapi-cli4ai run findPetsByStatus status=available
     """
     _profile_name, profile = get_active_profile()
     spec = fetch_spec(profile)
@@ -1837,6 +2031,15 @@ def cmd_run(
         else:
             err_console.print("[red]Input must be a JSON object or array, not a scalar.[/red]")
             raise typer.Exit(1)
+
+    if arguments:
+        parsed_input.update(_parse_key_value_args(arguments, endpoint))
+
+    _refuse_if_not_read_only(profile, bool(endpoint.get("read_only")), f"'{endpoint['operationId']}'")
+
+    if endpoint.get("mcp_tool"):
+        _run_mcp_tool(profile, endpoint["mcp_tool"], parsed_input, raw=raw, json_output=output_json_flag)
+        return
 
     # Route inputs to the right places
     method = endpoint["method"]
@@ -1972,6 +2175,76 @@ def cmd_run(
                     raise typer.Exit(1)
     except httpx.HTTPError as e:
         err_console.print(f"[red]Request failed: {e}[/red]")
+        raise typer.Exit(1)
+
+
+def _input_properties(endpoint: dict) -> dict:
+    """Map each input name to its schema: parameters plus top-level body properties."""
+    props: dict = {}
+    body = ((endpoint.get("requestBody") or {}).get("content") or {}).get("application/json", {}).get("schema", {})
+    if isinstance(body, dict):
+        props.update(body.get("properties") or {})
+    for param in endpoint.get("parameters", []):
+        if isinstance(param, dict) and "name" in param:
+            props[param["name"]] = param.get("schema", {})
+    return props
+
+
+def _coerce_value(value: str, schema: dict) -> Any:
+    typ = schema.get("type") if isinstance(schema, dict) else None
+    types = typ if isinstance(typ, list) else [typ]
+    if "string" in types or typ is None and not schema:
+        return value
+    try:
+        if "integer" in types:
+            return int(value)
+        if "number" in types:
+            return float(value)
+        if "boolean" in types:
+            if value.lower() in ("true", "1", "yes"):
+                return True
+            if value.lower() in ("false", "0", "no"):
+                return False
+            raise ValueError(value)
+        return json.loads(value)
+    except (ValueError, json.JSONDecodeError):
+        return value
+
+
+def _parse_key_value_args(arguments: list[str], endpoint: dict) -> dict:
+    """Turn ``key=value`` words into inputs, typed by the operation's schema."""
+    props = _input_properties(endpoint)
+    result: dict = {}
+    for arg in arguments:
+        if "=" not in arg:
+            err_console.print(f"[red]Expected key=value, got: {arg}[/red]")
+            raise typer.Exit(1)
+        key, value = arg.split("=", 1)
+        result[key] = _coerce_value(value, props.get(key, {}))
+    return result
+
+
+def _run_mcp_tool(profile: dict, tool: str, arguments: dict, raw: bool, json_output: bool) -> None:
+    verify = profile.get("verify_ssl", True) and get_verify_ssl()
+    headers = dict(profile.get("headers", {}))
+    headers.update(get_auth_headers(profile))
+    start_time = time.perf_counter()
+    err_console.print(f"[dim]tool {tool}...[/dim]")
+    try:
+        with _make_client(verify=verify) as client, _mcp_session(client, profile, headers) as session:
+            result = session.call_tool(tool, arguments)
+    except mcp_mod.MCPAuthError:
+        err_console.print("[red]Not signed in, or the sign-in expired. Run 'openapi-cli4ai login'.[/red]")
+        raise typer.Exit(1)
+    except (mcp_mod.MCPError, httpx.HTTPError) as e:
+        err_console.print(f"[red]Tool call failed: {e}[/red]")
+        raise typer.Exit(1)
+    if json_output or raw:
+        print(json.dumps(result, indent=None if raw else 2))
+    else:
+        print(mcp_mod.result_text(result))
+    err_console.print(f"[dim]{time.perf_counter() - start_time:.2f}s[/dim]")
+    if result.get("isError"):
         raise typer.Exit(1)
 
 
@@ -2379,7 +2652,13 @@ def cmd_login(
         verify = profile.get("verify_ssl", True) and get_verify_ssl()
         base_url = profile.get("base_url", "").rstrip("/")
         _oidc_login(
-            auth_config, profile_name, no_browser=no_browser, verify=verify, base_url=base_url, force_login=force_login
+            auth_config,
+            profile_name,
+            no_browser=no_browser,
+            verify=verify,
+            base_url=base_url,
+            force_login=force_login,
+            resource_url=profile.get("mcp_url", "") or base_url,
         )
         _try_post_login_spec_fetch(profile)
         return
@@ -2569,7 +2848,10 @@ def _try_post_login_spec_fetch(profile: dict) -> None:
         spec = fetch_spec(profile, refresh=True)
         endpoints = extract_endpoint_summaries(spec)
         spec_title = spec.get("info", {}).get("title", "Unknown")
-        console.print(f"[green]Fetched spec: {spec_title} ({len(endpoints)} endpoints)[/green]")
+        if spec.get("x-mcp"):
+            console.print(f"[green]Connected to {spec_title}: {len(endpoints)} tools available.[/green]")
+        else:
+            console.print(f"[green]Fetched spec: {spec_title} ({len(endpoints)} endpoints)[/green]")
     except (
         typer.Exit,
         httpx.HTTPError,
@@ -2584,15 +2866,34 @@ def _try_post_login_spec_fetch(profile: dict) -> None:
 
 
 @app.command("logout")
-def cmd_logout() -> None:
-    """Clear cached authentication tokens for the active profile."""
-    profile_name, _profile = get_active_profile()
+def cmd_logout(
+    forget_client: Annotated[
+        bool, typer.Option("--forget-client", help="Also drop the registered OAuth client and discovered endpoints")
+    ] = False,
+) -> None:
+    """Sign out: revoke the token where the server supports it, then clear the local cache."""
+    profile_name, profile = get_active_profile()
     token_cache = CACHE_DIR / f"{_safe_profile_name(profile_name)}_token.json"
     if token_cache.exists():
+        auth_config = _with_registered_client(profile_name, profile.get("auth", {}))
+        verify = profile.get("verify_ssl", True) and get_verify_ssl()
+        try:
+            cached = json.loads(token_cache.read_text())
+        except (OSError, json.JSONDecodeError):
+            cached = {}
+        revoked = _revoke_token(auth_config, cached.get("refresh_token") or cached.get("access_token", ""), verify)
         token_cache.unlink()
-        console.print(f"[green]Logged out from '{profile_name}'.[/green]")
+        note = " Token revoked on the server." if revoked else ""
+        console.print(f"[green]Logged out from '{profile_name}'.{note}[/green]")
     else:
         console.print(f"[dim]No cached token for '{profile_name}'.[/dim]")
+    reg = _client_registration_path(profile_name)
+    if forget_client and reg.exists():
+        reg.unlink()
+        console.print("[dim]Forgot the registered OAuth client.[/dim]")
+    env_var = profile.get("auth", {}).get("token_env_var")
+    if env_var and os.environ.get(env_var):
+        err_console.print(f"[yellow]{env_var} is still set and will still be used. Run: unset {env_var}[/yellow]")
 
 
 # ── Commands: profile ──────────────────────────────────────────────────────────
@@ -2601,22 +2902,51 @@ def cmd_profile_add(
     name: Annotated[str, typer.Argument(help="Profile name")],
     url: Annotated[str, typer.Option("--url", "-u", help="Base URL of the API")] = "",
     spec_path: Annotated[str, typer.Option("--spec", "-s", help="Path to OpenAPI spec")] = "/openapi.json",
-    auth_type: Annotated[str, typer.Option("--auth", help="Auth type: bearer, oidc, api-key, basic, none")] = "none",
+    auth_type: Annotated[str, typer.Option("--auth", help="Auth type: bearer, oidc, api-key, basic, none")] = "",
+    mcp_url: Annotated[
+        str, typer.Option("--mcp-url", help="Use an MCP server (Streamable HTTP) instead of an OpenAPI spec")
+    ] = "",
+    token_env_var: Annotated[
+        str, typer.Option("--token-env", help="Environment variable holding an API key, sent as a bearer token")
+    ] = "",
+    read_only: Annotated[
+        bool, typer.Option("--read-only", help="Allow only operations that cannot change data")
+    ] = False,
 ) -> None:
-    """Add a new API profile."""
+    """Add a new API profile.
+
+    With --mcp-url and no --auth, the profile signs in through the browser,
+    discovering the server's OAuth endpoints and registering itself.
+
+    Example:
+        openapi-cli4ai profile add myserver --mcp-url https://example.com/mcp --read-only
+    """
+    if not url and mcp_url:
+        parts = urllib.parse.urlsplit(mcp_url)
+        url = f"{parts.scheme}://{parts.netloc}"
     if not url:
         url = typer.prompt("Base URL")
+    if not auth_type:
+        auth_type = "oidc" if mcp_url else ("bearer" if token_env_var else "none")
 
     data = load_profiles()
     if name in data.get("profiles", {}) and not typer.confirm(f"Profile '{name}' exists. Overwrite?"):
         raise typer.Exit(0)
 
-    data.setdefault("profiles", {})[name] = {
+    new_profile: dict = {
         "base_url": url.rstrip("/"),
-        "openapi_path": spec_path,
         "auth": {"type": auth_type},
         "verify_ssl": True,
     }
+    if mcp_url:
+        new_profile["mcp_url"] = mcp_url
+    else:
+        new_profile["openapi_path"] = spec_path
+    if token_env_var:
+        new_profile["auth"]["token_env_var"] = token_env_var
+    if read_only:
+        new_profile["read_only"] = True
+    data.setdefault("profiles", {})[name] = new_profile
 
     if not data.get("active_profile"):
         data["active_profile"] = name
@@ -2986,6 +3316,9 @@ def main(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show request/response details")] = False,
     timeout: Annotated[float, typer.Option("--timeout", help="HTTP timeout in seconds")] = 60.0,
     retries: Annotated[int, typer.Option("--retries", help="Retry count for 429/503 responses")] = 0,
+    read_only: Annotated[
+        bool, typer.Option("--read-only", help="Allow only operations that cannot change data (also OAC_READ_ONLY=1)")
+    ] = False,
 ) -> None:
     """openapi-cli4ai — Interact with any REST API using natural language.
 
@@ -2997,6 +3330,7 @@ def main(
     _state._timeout_seconds = timeout
     _state._max_retries = retries
     _state._profile_override = profile
+    _state._read_only = read_only
 
     if version:
         console.print(f"{APP_NAME} {VERSION}")
@@ -3009,6 +3343,7 @@ def main(
                 "[cyan]init[/cyan]       Point it at any API with an OpenAPI spec\n"
                 "[cyan]catalog[/cyan]    Browse & install ready-made API profiles\n"
                 "[cyan]endpoints[/cyan]  Discover and search API endpoints\n"
+                "[cyan]run[/cyan]        Run an operation or MCP tool by name\n"
                 "[cyan]call[/cyan]       Call any endpoint directly\n"
                 "[cyan]profile[/cyan]    Manage your installed profiles\n"
                 "[cyan]login[/cyan]      Authenticate (OAuth/token flows)\n"
